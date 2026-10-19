@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
@@ -114,5 +115,26 @@ func TestPgStorageUpdateBatchRollsBack(t *testing.T) {
 	}
 	if _, err := s.GetCounter(ctx, "c"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("failed batch must be rolled back, got %v", err)
+	}
+}
+
+func TestPgStorageRetriesWhenDatabaseIsDown(t *testing.T) {
+	db, err := sql.Open("pgx", "postgres://user:pw@127.0.0.1:1/metrics?sslmode=disable&connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	delay := 20 * time.Millisecond
+	s := NewPgStorage(db)
+	s.delays = []time.Duration{delay, delay, delay}
+
+	start := time.Now()
+	err = s.UpdateGauge(ctx, "g", 1)
+	if err == nil {
+		t.Fatal("expected error when database is down")
+	}
+	if elapsed := time.Since(start); elapsed < 3*delay {
+		t.Errorf("expected 3 retry pauses (>= %v), took %v", 3*delay, elapsed)
 	}
 }
