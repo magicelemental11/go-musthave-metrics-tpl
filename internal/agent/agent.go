@@ -14,12 +14,10 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
-// requestTimeout limits a single request to the server.
 const requestTimeout = 10 * time.Second
 
 var httpClient = &http.Client{Timeout: requestTimeout}
 
-// Agent collects runtime metrics and reports them to the server.
 type Agent struct {
 	mu        sync.Mutex
 	pollCount int64
@@ -27,14 +25,12 @@ type Agent struct {
 	gauges    map[string]float64
 }
 
-// NewAgent creates an agent with no collected metrics.
 func NewAgent() *Agent {
 	return &Agent{
 		gauges: make(map[string]float64),
 	}
 }
 
-// CollectMetrics reads runtime statistics and increments PollCount.
 func (a *Agent) CollectMetrics() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -70,7 +66,6 @@ func (a *Agent) CollectMetrics() {
 	a.gauges["RandomValue"] = rand.Float64()
 }
 
-// snapshot returns a copy of the collected gauges and the current PollCount.
 func (a *Agent) snapshot() (map[string]float64, int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -81,8 +76,7 @@ func (a *Agent) snapshot() (map[string]float64, int64) {
 	return gauges, a.pollCount
 }
 
-// ReportMetrics sends all collected metrics to the server at serverAddr.
-// The lock is not held while sending, so collecting continues during a slow report.
+// Во время отправки мьютекс не держим, чтобы сбор метрик не блокировался медленным сервером.
 func (a *Agent) ReportMetrics(serverAddr string) {
 	gauges, pollCount := a.snapshot()
 	url := serverAddr + "/update"
@@ -103,7 +97,7 @@ func (a *Agent) ReportMetrics(serverAddr string) {
 	}
 	log.Printf("sent counter PollCount = %d → %d", pollCount, status)
 	if status == http.StatusOK {
-		// Subtract only what was sent: polls made during the report are kept.
+		// Вычитаем только отправленное: опросы, сделанные во время отправки, не теряем.
 		a.mu.Lock()
 		a.pollCount -= pollCount
 		a.mu.Unlock()
