@@ -1,26 +1,51 @@
 package agent
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"runtime"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/sign"
 )
 
+const requestTimeout = 10 * time.Second
+
+var httpClient = &http.Client{Timeout: requestTimeout}
+
 type Agent struct {
+	mu        sync.Mutex
 	pollCount int64
 	stats     runtime.MemStats
 	gauges    map[string]float64
+	delays    []time.Duration
+	key       string
 }
 
-func NewAgent() *Agent {
+func NewAgent(key string) *Agent {
 	return &Agent{
+		key:    key,
 		gauges: make(map[string]float64),
+		delays: retry.DefaultDelays,
 	}
 }
 
 func (a *Agent) CollectMetrics() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	runtime.ReadMemStats(&a.stats)
 	a.pollCount++
 	a.gauges["Alloc"] = float64(a.stats.Alloc)
@@ -53,27 +78,85 @@ func (a *Agent) CollectMetrics() {
 	a.gauges["RandomValue"] = rand.Float64()
 }
 
-func (a *Agent) ReportMetrics(serverAddr string) {
+func (a *Agent) snapshot() (map[string]float64, int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	gauges := make(map[string]float64, len(a.gauges))
 	for name, value := range a.gauges {
-		url := fmt.Sprintf("%s/update/gauge/%s/%v", serverAddr, name, value)
-		resp, err := http.Post(url, "text/plain", nil)
-		if err != nil {
-			log.Printf("error sending %s: %v\n", name, err)
-			continue
-		}
-		resp.Body.Close()
-		log.Printf("sent gauge %s = %v → %d\n", name, value, resp.StatusCode)
+		gauges[name] = value
 	}
+	return gauges, a.pollCount
+}
 
-	url := fmt.Sprintf("%s/update/counter/PollCount/%d", serverAddr, a.pollCount)
-	resp, err := http.Post(url, "text/plain", nil)
-	if err != nil {
-		log.Printf("error sending PollCount: %v\n", err)
+// Во время отправки мьютекс не держим, чтобы сбор метрик не блокировался медленным сервером.
+func (a *Agent) ReportMetrics(serverAddr string) {
+	gauges, pollCount := a.snapshot()
+
+	batch := make([]model.Metrics, 0, len(gauges)+1)
+	for name, value := range gauges {
+		batch = append(batch, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
+	}
+	if pollCount > 0 {
+		batch = append(batch, model.Metrics{ID: "PollCount", MType: model.Counter, Delta: &pollCount})
+	}
+	if len(batch) == 0 {
 		return
 	}
-	resp.Body.Close()
-	log.Printf("sent counter PollCount = %d → %d\n", a.pollCount, resp.StatusCode)
-	if resp.StatusCode == http.StatusOK {
-		a.pollCount = 0
+
+	var status int
+	err := retry.Do(context.Background(), a.delays, func() (err error) {
+		status, err = sendBatch(serverAddr+"/updates/", a.key, batch)
+		return err
+	}, isTransientNetErr)
+	if err != nil {
+		log.Printf("error sending batch of %d metrics: %v", len(batch), err)
+		return
 	}
+	log.Printf("sent batch of %d metrics → %d", len(batch), status)
+	if status == http.StatusOK && pollCount > 0 {
+		// Вычитаем только отправленное: опросы, сделанные во время отправки, не теряем.
+		a.mu.Lock()
+		a.pollCount -= pollCount
+		a.mu.Unlock()
+	}
+}
+
+func isTransientNetErr(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func sendBatch(url, key string, batch []model.Metrics) (int, error) {
+	body, err := json.Marshal(batch)
+	if err != nil {
+		return 0, fmt.Errorf("marshal: %w", err)
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(body); err != nil {
+		return 0, fmt.Errorf("gzip: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return 0, fmt.Errorf("gzip: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	if err != nil {
+		return 0, fmt.Errorf("new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	if key != "" {
+		req.Header.Set(sign.Header, sign.Sign(key, buf.Bytes()))
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("post: %w", err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
 }
