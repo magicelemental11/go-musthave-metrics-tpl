@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"compress/gzip"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
 func TestCollectMetrics(t *testing.T) {
@@ -32,6 +36,22 @@ func TestReportMetrics(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
+		if r.URL.Path != "/update" || r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("unexpected request: %s, content-type %q", r.URL.Path, r.Header.Get("Content-Type"))
+		}
+		if r.Header.Get("Content-Encoding") != "gzip" {
+			t.Errorf("request body is not gzip-encoded")
+		}
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("invalid gzip body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var m model.Metrics
+		if err := json.NewDecoder(zr).Decode(&m); err != nil {
+			t.Errorf("invalid json body: %v", err)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()

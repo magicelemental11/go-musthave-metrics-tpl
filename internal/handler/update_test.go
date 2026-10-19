@@ -11,7 +11,7 @@ import (
 
 func TestUpdateMetric(t *testing.T) {
 	storage := repository.NewMemStorage()
-	h := NewHandler(storage)
+	h := NewHandler(storage, nil)
 
 	r := chi.NewRouter()
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetric)
@@ -28,7 +28,7 @@ func TestUpdateMetric(t *testing.T) {
 
 func TestUpdateMetricInvalidType(t *testing.T) {
 	storage := repository.NewMemStorage()
-	h := NewHandler(storage)
+	h := NewHandler(storage, nil)
 
 	r := chi.NewRouter()
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetric)
@@ -45,7 +45,7 @@ func TestUpdateMetricInvalidType(t *testing.T) {
 
 func TestUpdateMetricInvalidValue(t *testing.T) {
 	storage := repository.NewMemStorage()
-	h := NewHandler(storage)
+	h := NewHandler(storage, nil)
 
 	r := chi.NewRouter()
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetric)
@@ -61,7 +61,7 @@ func TestUpdateMetricInvalidValue(t *testing.T) {
 
 func TestUpdateCounter(t *testing.T) {
 	storage := repository.NewMemStorage()
-	h := NewHandler(storage)
+	h := NewHandler(storage, nil)
 
 	r := chi.NewRouter()
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetric)
