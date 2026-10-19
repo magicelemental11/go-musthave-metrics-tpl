@@ -8,7 +8,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -17,10 +19,17 @@ func main() {
 		log.Fatal(err)
 	}
 
+	logger, err := zap.NewProduction()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer logger.Sync()
+
 	storage := repository.NewMemStorage()
 	h := handler.NewHandler(storage)
 
 	r := chi.NewRouter()
+	r.Use(middleware.Logging(logger))
 
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetric)
 
