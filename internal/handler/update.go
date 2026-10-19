@@ -13,10 +13,12 @@ import (
 
 type Handler struct {
 	storage repository.Storage
+	pinger  Pinger
 }
 
-func NewHandler(s repository.Storage) *Handler {
-	return &Handler{storage: s}
+// NewHandler: pinger может быть nil — тогда /ping отвечает 500.
+func NewHandler(s repository.Storage, pinger Pinger) *Handler {
+	return &Handler{storage: s, pinger: pinger}
 }
 
 func (h *Handler) GetMetric(w http.ResponseWriter, r *http.Request) {
