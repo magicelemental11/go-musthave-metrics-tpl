@@ -79,11 +79,16 @@ func TestJSONErrors(t *testing.T) {
 		{"value not found", "/value", `{"id":"nope","type":"gauge"}`, http.StatusNotFound},
 		{"value unknown type", "/value", `{"id":"a","type":"x"}`, http.StatusBadRequest},
 		{"value invalid json", "/value", `nope`, http.StatusBadRequest},
+		{"body too large", "/update", `{"id":"` + strings.Repeat("a", 2<<20) + `"}`, http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if rr := post(r, tt.path, tt.body); rr.Code != tt.want {
+			rr := post(r, tt.path, tt.body)
+			if rr.Code != tt.want {
 				t.Errorf("got %d, want %d", rr.Code, tt.want)
+			}
+			if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", ct)
 			}
 		})
 	}

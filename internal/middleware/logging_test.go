@@ -13,7 +13,9 @@ func TestLogging(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	h := Logging(zap.New(core))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
-		w.Write([]byte("hello"))
+		if _, err := w.Write([]byte("hello")); err != nil {
+			t.Error(err)
+		}
 	}))
 
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/update/gauge/a/1", nil))
@@ -39,7 +41,11 @@ func TestLoggingDefaultStatus(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	h := Logging(zap.New(core))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
-	if got := logs.All()[0].ContextMap()["status"]; got != int64(200) {
+	entries := logs.All()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 log entry, got %d", len(entries))
+	}
+	if got := entries[0].ContextMap()["status"]; got != int64(200) {
 		t.Errorf("status = %v", got)
 	}
 }

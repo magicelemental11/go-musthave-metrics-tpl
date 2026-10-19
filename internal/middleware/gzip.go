@@ -2,6 +2,9 @@ package middleware
 
 import (
 	"compress/gzip"
+	"errors"
+	"io"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -24,7 +27,6 @@ func (w *compressWriter) WriteHeader(status int) {
 	w.wroteHeader = true
 	if shouldCompress(w.Header().Get("Content-Type")) && w.Header().Get("Content-Encoding") == "" {
 		w.Header().Set("Content-Encoding", "gzip")
-		w.Header().Add("Vary", "Accept-Encoding")
 		w.Header().Del("Content-Length")
 		w.gz = gzip.NewWriter(w.ResponseWriter)
 	}
@@ -48,23 +50,31 @@ func (w *compressWriter) close() error {
 	return nil
 }
 
-// Gzip распаковывает входящие запросы с Content-Encoding: gzip и сжимает ответы
-// application/json и text/html для клиентов, которые прислали Accept-Encoding: gzip.
+// Gzip распаковывает запросы с Content-Encoding: gzip и сжимает ответы
+// application/json и text/html, если клиент прислал Accept-Encoding: gzip.
 func Gzip(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
 			zr, err := gzip.NewReader(r.Body)
-			if err != nil {
+			switch {
+			case err == nil:
+				defer zr.Close()
+				r.Body = zr
+			case !errors.Is(err, io.EOF): // пустое тело оставляем как есть
 				http.Error(w, "invalid gzip body", http.StatusBadRequest)
 				return
 			}
-			defer zr.Close()
-			r.Body = zr
 		}
+
+		w.Header().Add("Vary", "Accept-Encoding")
 
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			cw := &compressWriter{ResponseWriter: w}
-			defer cw.close()
+			defer func() {
+				if err := cw.close(); err != nil {
+					log.Printf("gzip close: %v", err)
+				}
+			}()
 			w = cw
 		}
 

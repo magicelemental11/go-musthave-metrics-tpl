@@ -17,7 +17,7 @@ func main() {
 
 	a := agent.NewAgent()
 
-	pollTicker := time.NewTicker(time.Duration(cfg.PollInterval) * time.Second)
+	pollTicker := time.NewTicker(cfg.PollInterval)
 	defer pollTicker.Stop()
 
 	go func() {
@@ -26,7 +26,7 @@ func main() {
 		}
 	}()
 
-	reportTicker := time.NewTicker(time.Duration(cfg.ReportInterval) * time.Second)
+	reportTicker := time.NewTicker(cfg.ReportInterval)
 	defer reportTicker.Stop()
 
 	for range reportTicker.C {
