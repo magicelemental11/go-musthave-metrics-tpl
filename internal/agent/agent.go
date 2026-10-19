@@ -20,6 +20,8 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/sign"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 )
 
 const requestTimeout = 10 * time.Second
@@ -33,13 +35,15 @@ type Agent struct {
 	gauges    map[string]float64
 	delays    []time.Duration
 	key       string
+	rateLimit int
 }
 
-func NewAgent(key string) *Agent {
+func NewAgent(key string, rateLimit int) *Agent {
 	return &Agent{
-		key:    key,
-		gauges: make(map[string]float64),
-		delays: retry.DefaultDelays,
+		key:       key,
+		rateLimit: rateLimit,
+		gauges:    make(map[string]float64),
+		delays:    retry.DefaultDelays,
 	}
 }
 
@@ -88,37 +92,88 @@ func (a *Agent) snapshot() (map[string]float64, int64) {
 	return gauges, a.pollCount
 }
 
+func (a *Agent) CollectSystemMetrics() error {
+	vm, err := mem.VirtualMemory()
+	if err != nil {
+		return fmt.Errorf("virtual memory: %w", err)
+	}
+	cpus, err := cpu.Percent(0, true)
+	if err != nil {
+		return fmt.Errorf("cpu percent: %w", err)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.gauges["TotalMemory"] = float64(vm.Total)
+	a.gauges["FreeMemory"] = float64(vm.Free)
+	for i, percent := range cpus {
+		a.gauges[fmt.Sprintf("CPUutilization%d", i+1)] = percent
+	}
+	return nil
+}
+
 // Во время отправки мьютекс не держим, чтобы сбор метрик не блокировался медленным сервером.
-func (a *Agent) ReportMetrics(serverAddr string) {
+func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 	gauges, pollCount := a.snapshot()
 
 	batch := make([]model.Metrics, 0, len(gauges)+1)
-	for name, value := range gauges {
-		batch = append(batch, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
-	}
 	if pollCount > 0 {
 		batch = append(batch, model.Metrics{ID: "PollCount", MType: model.Counter, Delta: &pollCount})
+	}
+	for name, value := range gauges {
+		batch = append(batch, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
 	}
 	if len(batch) == 0 {
 		return
 	}
 
-	var status int
-	err := retry.Do(context.Background(), a.delays, func() (err error) {
-		status, err = sendBatch(serverAddr+"/updates/", a.key, batch)
-		return err
-	}, isTransientNetErr)
-	if err != nil {
-		log.Printf("error sending batch of %d metrics: %v", len(batch), err)
-		return
+	chunks := splitBatch(batch, a.rateLimit)
+	runPool(a.rateLimit, len(chunks), func(i int) {
+		var status int
+		err := retry.Do(ctx, a.delays, func() (err error) {
+			status, err = sendBatch(ctx, serverAddr+"/updates/", a.key, chunks[i])
+			return err
+		}, isTransientNetErr)
+		if err != nil {
+			log.Printf("error sending batch of %d metrics: %v", len(chunks[i]), err)
+			return
+		}
+		log.Printf("sent batch of %d metrics → %d", len(chunks[i]), status)
+		if i == 0 && status == http.StatusOK && pollCount > 0 {
+			// Вычитаем только отправленное: опросы, сделанные во время отправки, не теряем.
+			a.mu.Lock()
+			a.pollCount -= pollCount
+			a.mu.Unlock()
+		}
+	})
+}
+
+func splitBatch(batch []model.Metrics, parts int) [][]model.Metrics {
+	size := (len(batch) + parts - 1) / parts
+	chunks := make([][]model.Metrics, 0, parts)
+	for start := 0; start < len(batch); start += size {
+		chunks = append(chunks, batch[start:min(start+size, len(batch))])
 	}
-	log.Printf("sent batch of %d metrics → %d", len(batch), status)
-	if status == http.StatusOK && pollCount > 0 {
-		// Вычитаем только отправленное: опросы, сделанные во время отправки, не теряем.
-		a.mu.Lock()
-		a.pollCount -= pollCount
-		a.mu.Unlock()
+	return chunks
+}
+
+func runPool(limit, n int, job func(i int)) {
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range min(limit, n) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				job(i)
+			}
+		}()
 	}
+	for i := range n {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
 }
 
 func isTransientNetErr(err error) bool {
@@ -130,7 +185,7 @@ func isTransientNetErr(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-func sendBatch(url, key string, batch []model.Metrics) (int, error) {
+func sendBatch(ctx context.Context, url, key string, batch []model.Metrics) (int, error) {
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return 0, fmt.Errorf("marshal: %w", err)
@@ -144,7 +199,7 @@ func sendBatch(url, key string, batch []model.Metrics) (int, error) {
 		return 0, fmt.Errorf("gzip: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
 	if err != nil {
 		return 0, fmt.Errorf("new request: %w", err)
 	}

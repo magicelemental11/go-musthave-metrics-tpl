@@ -2,6 +2,7 @@ package agent
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -22,7 +24,7 @@ import (
 )
 
 func TestCollectMetrics(t *testing.T) {
-	a := NewAgent("")
+	a := NewAgent("", 1)
 
 	a.CollectMetrics()
 
@@ -67,9 +69,9 @@ func TestReportMetrics(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	a := NewAgent("")
+	a := NewAgent("", 1)
 	a.CollectMetrics()
-	a.ReportMetrics(ts.URL)
+	a.ReportMetrics(context.Background(), ts.URL)
 
 	if requestCount != 1 {
 		t.Fatalf("expected 1 request, got %d", requestCount)
@@ -88,9 +90,9 @@ func TestReportMetricsKeepsPollCountOnFailure(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	a := NewAgent("")
+	a := NewAgent("", 1)
 	a.CollectMetrics()
-	a.ReportMetrics(ts.URL)
+	a.ReportMetrics(context.Background(), ts.URL)
 
 	if a.pollCount != 1 {
 		t.Errorf("expected pollCount to stay 1 after a failed report, got %d", a.pollCount)
@@ -103,13 +105,13 @@ func TestReportMetricsSkipsEmptyBatch(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	NewAgent("").ReportMetrics(ts.URL)
+	NewAgent("", 1).ReportMetrics(context.Background(), ts.URL)
 }
 
 var shortDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 
 func newTestAgent() *Agent {
-	a := NewAgent("")
+	a := NewAgent("", 1)
 	a.delays = shortDelays
 	a.CollectMetrics()
 	return a
@@ -137,7 +139,7 @@ func TestReportMetricsRetriesConnectionErrors(t *testing.T) {
 	defer ts.Close()
 
 	a := newTestAgent()
-	a.ReportMetrics(ts.URL)
+	a.ReportMetrics(context.Background(), ts.URL)
 
 	if requests.Load() != 3 {
 		t.Errorf("expected 3 requests, got %d", requests.Load())
@@ -156,7 +158,7 @@ func TestReportMetricsGivesUpAfterThreeRetries(t *testing.T) {
 	defer ts.Close()
 
 	a := newTestAgent()
-	a.ReportMetrics(ts.URL)
+	a.ReportMetrics(context.Background(), ts.URL)
 
 	if requests.Load() != 4 {
 		t.Errorf("expected 4 requests (1 + 3 retries), got %d", requests.Load())
@@ -177,7 +179,7 @@ func TestReportMetricsDoesNotRetryHTTPErrors(t *testing.T) {
 			defer ts.Close()
 
 			a := newTestAgent()
-			a.ReportMetrics(ts.URL)
+			a.ReportMetrics(context.Background(), ts.URL)
 
 			if requests.Load() != 1 {
 				t.Errorf("expected 1 request, got %d", requests.Load())
@@ -206,7 +208,7 @@ func TestReportMetricsRetriesWhenServerIsDown(t *testing.T) {
 	defer func() { httpClient = original }()
 
 	a := newTestAgent()
-	a.ReportMetrics("http://localhost:1")
+	a.ReportMetrics(context.Background(), "http://localhost:1")
 
 	if transport.calls.Load() != 4 {
 		t.Errorf("expected 4 attempts (1 + 3 retries), got %d", transport.calls.Load())
@@ -256,9 +258,9 @@ func TestReportMetricsSignsBody(t *testing.T) {
 			header = r.Header.Get(sign.Header)
 			ok = sign.Valid(key, body, header)
 		}))
-		a := NewAgent(key)
+		a := NewAgent(key, 1)
 		a.CollectMetrics()
-		a.ReportMetrics(ts.URL)
+		a.ReportMetrics(context.Background(), ts.URL)
 		ts.Close()
 
 		if key == "" && header != "" {
@@ -266,6 +268,139 @@ func TestReportMetricsSignsBody(t *testing.T) {
 		}
 		if key != "" && !ok {
 			t.Errorf("header %q does not match body", header)
+		}
+	}
+}
+
+func TestRunPoolLimitsConcurrency(t *testing.T) {
+	var current, peak, done atomic.Int32
+	runPool(3, 12, func(int) {
+		n := current.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		current.Add(-1)
+		done.Add(1)
+	})
+	if done.Load() != 12 {
+		t.Fatalf("ran %d jobs, want 12", done.Load())
+	}
+	if peak.Load() > 3 {
+		t.Fatalf("peak concurrency %d, want at most 3", peak.Load())
+	}
+}
+
+func TestReportMetricsSplitsAcrossRateLimit(t *testing.T) {
+	var requests, total, polls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("gzip: %v", err)
+			return
+		}
+		var batch []model.Metrics
+		if err := json.NewDecoder(zr).Decode(&batch); err != nil {
+			t.Errorf("json: %v", err)
+		}
+		requests.Add(1)
+		total.Add(int32(len(batch)))
+		for _, m := range batch {
+			if m.ID == "PollCount" {
+				polls.Add(1)
+			}
+		}
+	}))
+	defer ts.Close()
+
+	a := NewAgent("", 3)
+	a.CollectMetrics()
+	gauges, _ := a.snapshot()
+	a.ReportMetrics(context.Background(), ts.URL)
+
+	if requests.Load() != 3 || int(total.Load()) != len(gauges)+1 || polls.Load() != 1 {
+		t.Fatalf("requests=%d metrics=%d pollCount sent=%d", requests.Load(), total.Load(), polls.Load())
+	}
+	if a.pollCount != 0 {
+		t.Errorf("pollCount not reset: %d", a.pollCount)
+	}
+}
+
+func TestCollectSystemMetrics(t *testing.T) {
+	a := NewAgent("", 1)
+	if err := a.CollectSystemMetrics(); err != nil {
+		t.Fatal(err)
+	}
+	gauges, _ := a.snapshot()
+	for _, name := range []string{"TotalMemory", "FreeMemory", "CPUutilization1"} {
+		if _, ok := gauges[name]; !ok {
+			t.Errorf("missing %s", name)
+		}
+	}
+	if gauges["TotalMemory"] <= 0 {
+		t.Errorf("TotalMemory = %v", gauges["TotalMemory"])
+	}
+}
+
+func TestReportMetricsLimitsConcurrentRequests(t *testing.T) {
+	var current, peak, requests atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := current.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		current.Add(-1)
+		requests.Add(1)
+	}))
+	defer ts.Close()
+
+	a := NewAgent("", 2)
+	a.CollectMetrics()
+	a.ReportMetrics(context.Background(), ts.URL)
+
+	if requests.Load() != 2 || peak.Load() > 2 {
+		t.Fatalf("requests=%d peak=%d, want 2 requests and peak <= 2", requests.Load(), peak.Load())
+	}
+}
+
+func TestReportMetricsIncludesSystemMetrics(t *testing.T) {
+	seen := make(map[string]bool)
+	var mu sync.Mutex
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("gzip: %v", err)
+			return
+		}
+		var batch []model.Metrics
+		if err := json.NewDecoder(zr).Decode(&batch); err != nil {
+			t.Errorf("json: %v", err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		for _, m := range batch {
+			seen[m.ID] = true
+		}
+	}))
+	defer ts.Close()
+
+	a := NewAgent("", 1)
+	a.CollectMetrics()
+	if err := a.CollectSystemMetrics(); err != nil {
+		t.Fatal(err)
+	}
+	a.ReportMetrics(context.Background(), ts.URL)
+
+	for _, name := range []string{"TotalMemory", "FreeMemory", "CPUutilization1"} {
+		if !seen[name] {
+			t.Errorf("%s was not sent", name)
 		}
 	}
 }

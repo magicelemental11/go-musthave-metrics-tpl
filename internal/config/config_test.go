@@ -87,7 +87,7 @@ func TestLoadAgentPriority(t *testing.T) {
 		t.Setenv("REPORT_INTERVAL", "")
 		t.Setenv("KEY", "")
 		cfg, err := LoadAgent(nil)
-		want := AgentConfig{Address: "localhost:8080", PollInterval: 2 * time.Second, ReportInterval: 10 * time.Second}
+		want := AgentConfig{Address: "localhost:8080", PollInterval: 2 * time.Second, ReportInterval: 10 * time.Second, RateLimit: 1}
 		if err != nil || cfg != want {
 			t.Fatalf("got %+v, %v", cfg, err)
 		}
@@ -98,7 +98,7 @@ func TestLoadAgentPriority(t *testing.T) {
 		t.Setenv("REPORT_INTERVAL", "")
 		t.Setenv("KEY", "")
 		cfg, err := LoadAgent([]string{"-a", "h:1", "-p", "3", "-r", "5"})
-		want := AgentConfig{Address: "h:1", PollInterval: 3 * time.Second, ReportInterval: 5 * time.Second}
+		want := AgentConfig{Address: "h:1", PollInterval: 3 * time.Second, ReportInterval: 5 * time.Second, RateLimit: 1}
 		if err != nil || cfg != want {
 			t.Fatalf("got %+v, %v", cfg, err)
 		}
@@ -108,7 +108,7 @@ func TestLoadAgentPriority(t *testing.T) {
 		t.Setenv("POLL_INTERVAL", "7")
 		t.Setenv("REPORT_INTERVAL", "20")
 		cfg, err := LoadAgent([]string{"-a", "h:1", "-p", "3", "-r", "5"})
-		want := AgentConfig{Address: "h:2", PollInterval: 7 * time.Second, ReportInterval: 20 * time.Second}
+		want := AgentConfig{Address: "h:2", PollInterval: 7 * time.Second, ReportInterval: 20 * time.Second, RateLimit: 1}
 		if err != nil || cfg != want {
 			t.Fatalf("got %+v, %v", cfg, err)
 		}
@@ -181,6 +181,33 @@ func TestLoadKey(t *testing.T) {
 		a, err := LoadAgent([]string{"-k", "flagkey"})
 		if err != nil || a.Key != "envkey" {
 			t.Fatalf("agent: %+v, %v", a, err)
+		}
+	})
+}
+
+func TestLoadAgentRateLimit(t *testing.T) {
+	t.Run("flag", func(t *testing.T) {
+		t.Setenv("RATE_LIMIT", "")
+		cfg, err := LoadAgent([]string{"-l", "4"})
+		if err != nil || cfg.RateLimit != 4 {
+			t.Fatalf("got %+v, %v", cfg, err)
+		}
+	})
+	t.Run("env over flag", func(t *testing.T) {
+		t.Setenv("RATE_LIMIT", "7")
+		cfg, err := LoadAgent([]string{"-l", "4"})
+		if err != nil || cfg.RateLimit != 7 {
+			t.Fatalf("got %+v, %v", cfg, err)
+		}
+	})
+	t.Run("invalid", func(t *testing.T) {
+		t.Setenv("RATE_LIMIT", "")
+		if _, err := LoadAgent([]string{"-l", "0"}); err == nil {
+			t.Fatal("expected error for 0")
+		}
+		t.Setenv("RATE_LIMIT", "abc")
+		if _, err := LoadAgent(nil); err == nil {
+			t.Fatal("expected error for abc")
 		}
 	})
 }
