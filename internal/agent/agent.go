@@ -1,14 +1,20 @@
 package agent
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
 	"runtime"
+	"sync"
+
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
 type Agent struct {
+	mu        sync.Mutex
 	pollCount int64
 	stats     runtime.MemStats
 	gauges    map[string]float64
@@ -21,6 +27,8 @@ func NewAgent() *Agent {
 }
 
 func (a *Agent) CollectMetrics() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	runtime.ReadMemStats(&a.stats)
 	a.pollCount++
 	a.gauges["Alloc"] = float64(a.stats.Alloc)
@@ -54,26 +62,42 @@ func (a *Agent) CollectMetrics() {
 }
 
 func (a *Agent) ReportMetrics(serverAddr string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	url := serverAddr + "/update"
+
 	for name, value := range a.gauges {
-		url := fmt.Sprintf("%s/update/gauge/%s/%v", serverAddr, name, value)
-		resp, err := http.Post(url, "text/plain", nil)
+		v := value
+		status, err := sendMetric(url, model.Metrics{ID: name, MType: model.Gauge, Value: &v})
 		if err != nil {
 			log.Printf("error sending %s: %v\n", name, err)
 			continue
 		}
-		resp.Body.Close()
-		log.Printf("sent gauge %s = %v → %d\n", name, value, resp.StatusCode)
+		log.Printf("sent gauge %s = %v → %d\n", name, value, status)
 	}
 
-	url := fmt.Sprintf("%s/update/counter/PollCount/%d", serverAddr, a.pollCount)
-	resp, err := http.Post(url, "text/plain", nil)
+	delta := a.pollCount
+	status, err := sendMetric(url, model.Metrics{ID: "PollCount", MType: model.Counter, Delta: &delta})
 	if err != nil {
 		log.Printf("error sending PollCount: %v\n", err)
 		return
 	}
-	resp.Body.Close()
-	log.Printf("sent counter PollCount = %d → %d\n", a.pollCount, resp.StatusCode)
-	if resp.StatusCode == http.StatusOK {
+	log.Printf("sent counter PollCount = %d → %d\n", a.pollCount, status)
+	if status == http.StatusOK {
 		a.pollCount = 0
 	}
+}
+
+func sendMetric(url string, m model.Metrics) (int, error) {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return 0, fmt.Errorf("marshal: %w", err)
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
 }
