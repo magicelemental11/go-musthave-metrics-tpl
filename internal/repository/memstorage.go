@@ -1,19 +1,12 @@
 package repository
 
 import (
+	"context"
 	"sort"
 	"sync"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
-
-type Storage interface {
-	GetGauge(name string) (float64, bool)
-	GetCounter(name string) (int64, bool)
-	UpdateGauge(name string, value float64)
-	UpdateCounter(name string, value int64) int64
-	GetAllMetrics() (map[string]float64, map[string]int64)
-}
 
 type MemStorage struct {
 	mu       sync.RWMutex
@@ -28,36 +21,43 @@ func NewMemStorage() *MemStorage {
 	}
 }
 
-func (m *MemStorage) GetGauge(name string) (float64, bool) {
+func (m *MemStorage) GetGauge(_ context.Context, name string) (float64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	value, ok := m.gauges[name]
-	return value, ok
+	if !ok {
+		return 0, ErrNotFound
+	}
+	return value, nil
 }
 
-func (m *MemStorage) GetCounter(name string) (int64, bool) {
+func (m *MemStorage) GetCounter(_ context.Context, name string) (int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	value, ok := m.counters[name]
-	return value, ok
+	if !ok {
+		return 0, ErrNotFound
+	}
+	return value, nil
 }
 
-func (m *MemStorage) UpdateGauge(name string, value float64) {
+func (m *MemStorage) UpdateGauge(_ context.Context, name string, value float64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.gauges[name] = value
+	return nil
 }
 
 // UpdateCounter прибавляет value к счётчику и возвращает новое накопленное значение.
-func (m *MemStorage) UpdateCounter(name string, value int64) int64 {
+func (m *MemStorage) UpdateCounter(_ context.Context, name string, value int64) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.counters[name] += value
-	return m.counters[name]
+	return m.counters[name], nil
 }
 
 // GetAllMetrics возвращает копии внутренних карт.
-func (m *MemStorage) GetAllMetrics() (map[string]float64, map[string]int64) {
+func (m *MemStorage) GetAllMetrics(_ context.Context) (map[string]float64, map[string]int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	gauges := make(map[string]float64, len(m.gauges))
@@ -68,7 +68,7 @@ func (m *MemStorage) GetAllMetrics() (map[string]float64, map[string]int64) {
 	for k, v := range m.counters {
 		counters[k] = v
 	}
-	return gauges, counters
+	return gauges, counters, nil
 }
 
 // Snapshot возвращает все метрики списком, отсортированным по типу и имени.
