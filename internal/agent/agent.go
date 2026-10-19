@@ -9,10 +9,17 @@ import (
 	"net/http"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
+// requestTimeout limits a single request to the server.
+const requestTimeout = 10 * time.Second
+
+var httpClient = &http.Client{Timeout: requestTimeout}
+
+// Agent collects runtime metrics and reports them to the server.
 type Agent struct {
 	mu        sync.Mutex
 	pollCount int64
@@ -20,12 +27,14 @@ type Agent struct {
 	gauges    map[string]float64
 }
 
+// NewAgent creates an agent with no collected metrics.
 func NewAgent() *Agent {
 	return &Agent{
 		gauges: make(map[string]float64),
 	}
 }
 
+// CollectMetrics reads runtime statistics and increments PollCount.
 func (a *Agent) CollectMetrics() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -61,31 +70,43 @@ func (a *Agent) CollectMetrics() {
 	a.gauges["RandomValue"] = rand.Float64()
 }
 
-func (a *Agent) ReportMetrics(serverAddr string) {
+// snapshot returns a copy of the collected gauges and the current PollCount.
+func (a *Agent) snapshot() (map[string]float64, int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	gauges := make(map[string]float64, len(a.gauges))
+	for name, value := range a.gauges {
+		gauges[name] = value
+	}
+	return gauges, a.pollCount
+}
 
+// ReportMetrics sends all collected metrics to the server at serverAddr.
+// The lock is not held while sending, so collecting continues during a slow report.
+func (a *Agent) ReportMetrics(serverAddr string) {
+	gauges, pollCount := a.snapshot()
 	url := serverAddr + "/update"
 
-	for name, value := range a.gauges {
-		v := value
-		status, err := sendMetric(url, model.Metrics{ID: name, MType: model.Gauge, Value: &v})
+	for name, value := range gauges {
+		status, err := sendMetric(url, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
 		if err != nil {
-			log.Printf("error sending %s: %v\n", name, err)
+			log.Printf("error sending %s: %v", name, err)
 			continue
 		}
-		log.Printf("sent gauge %s = %v → %d\n", name, value, status)
+		log.Printf("sent gauge %s = %v → %d", name, value, status)
 	}
 
-	delta := a.pollCount
-	status, err := sendMetric(url, model.Metrics{ID: "PollCount", MType: model.Counter, Delta: &delta})
+	status, err := sendMetric(url, model.Metrics{ID: "PollCount", MType: model.Counter, Delta: &pollCount})
 	if err != nil {
-		log.Printf("error sending PollCount: %v\n", err)
+		log.Printf("error sending PollCount: %v", err)
 		return
 	}
-	log.Printf("sent counter PollCount = %d → %d\n", a.pollCount, status)
+	log.Printf("sent counter PollCount = %d → %d", pollCount, status)
 	if status == http.StatusOK {
-		a.pollCount = 0
+		// Subtract only what was sent: polls made during the report are kept.
+		a.mu.Lock()
+		a.pollCount -= pollCount
+		a.mu.Unlock()
 	}
 }
 
@@ -94,9 +115,9 @@ func sendMetric(url string, m model.Metrics) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("marshal: %w", err)
 	}
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("post: %w", err)
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode, nil
