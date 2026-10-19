@@ -8,7 +8,6 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
-// maxBodySize limits the size of a JSON request body.
 const maxBodySize = 1 << 20
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -32,7 +31,6 @@ func decodeMetrics(w http.ResponseWriter, r *http.Request) (model.Metrics, bool)
 	return m, true
 }
 
-// UpdateMetricJSON handles POST /update: it stores a metric sent as JSON and returns its current value.
 func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 	m, ok := decodeMetrics(w, r)
 	if !ok {
@@ -65,7 +63,6 @@ func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, m)
 }
 
-// GetMetricJSON handles POST /value: it returns the metric with the given id and type, with its value filled in.
 func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	m, ok := decodeMetrics(w, r)
 	if !ok {
