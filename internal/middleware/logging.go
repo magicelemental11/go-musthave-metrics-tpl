@@ -7,7 +7,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// loggingResponseWriter remembers the status code and the number of body bytes written.
 type loggingResponseWriter struct {
 	http.ResponseWriter
 	status int
@@ -28,8 +27,6 @@ func (w *loggingResponseWriter) WriteHeader(status int) {
 	w.ResponseWriter.WriteHeader(status)
 }
 
-// Logging logs every request (URI, method, duration) and its response
-// (status code, body size) at Info level.
 func Logging(logger *zap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -30,7 +30,6 @@ func TestLoadServerPriority(t *testing.T) {
 	})
 }
 
-// clearServerEnv убирает переменные сервера из окружения на время теста.
 func clearServerEnv(t *testing.T) {
 	for _, name := range []string{"ADDRESS", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE"} {
 		t.Setenv(name, "") // запоминает исходное значение для восстановления

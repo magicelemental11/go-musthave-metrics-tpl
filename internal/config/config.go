@@ -1,4 +1,3 @@
-// Package config читает настройки агента и сервера из флагов и переменных окружения.
 package config
 
 import (
@@ -28,7 +27,7 @@ type AgentConfig struct {
 	ReportInterval time.Duration
 }
 
-// LoadServer собирает настройки сервера. Приоритет: переменная окружения, флаг, значение по умолчанию.
+// LoadServer: приоритет — переменная окружения, флаг, значение по умолчанию.
 func LoadServer(args []string) (ServerConfig, error) {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
@@ -63,7 +62,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 	}, nil
 }
 
-// LoadAgent собирает настройки агента. Приоритет: переменная окружения, флаг, значение по умолчанию.
+// LoadAgent: приоритет — переменная окружения, флаг, значение по умолчанию.
 func LoadAgent(args []string) (AgentConfig, error) {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
@@ -89,7 +88,6 @@ func LoadAgent(args []string) (AgentConfig, error) {
 	}, nil
 }
 
-// envString возвращает переменную окружения name или fallback, если она не задана.
 func envString(name, fallback string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
@@ -98,7 +96,7 @@ func envString(name, fallback string) string {
 }
 
 // seconds берёт интервал из переменной окружения name, а если её нет — из флага.
-// Значение должно быть не меньше min секунд.
+// Значение не должно быть меньше min секунд.
 func seconds(name string, flagValue, min int) (time.Duration, error) {
 	n := flagValue
 	if v := os.Getenv(name); v != "" {
