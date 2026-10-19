@@ -1,5 +1,3 @@
-// Package config loads agent and server settings from command-line flags
-// and environment variables.
 package config
 
 import (
@@ -12,20 +10,17 @@ import (
 
 const defaultAddress = "localhost:8080"
 
-// ServerConfig holds the server settings.
 type ServerConfig struct {
 	Address string
 }
 
-// AgentConfig holds the agent settings.
 type AgentConfig struct {
 	Address        string
 	PollInterval   time.Duration
 	ReportInterval time.Duration
 }
 
-// LoadServer builds the server settings from args (flags) and the environment.
-// Priority: environment variable, then flag, then default value.
+// LoadServer: приоритет — переменная окружения, флаг, значение по умолчанию.
 func LoadServer(args []string) (ServerConfig, error) {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
@@ -36,8 +31,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 	return ServerConfig{Address: envString("ADDRESS", *address)}, nil
 }
 
-// LoadAgent builds the agent settings from args (flags) and the environment.
-// Priority: environment variable, then flag, then default value.
+// LoadAgent: приоритет — переменная окружения, флаг, значение по умолчанию.
 func LoadAgent(args []string) (AgentConfig, error) {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
@@ -63,8 +57,6 @@ func LoadAgent(args []string) (AgentConfig, error) {
 	}, nil
 }
 
-// envString returns the value of the environment variable name,
-// or fallback if it is unset or empty.
 func envString(name, fallback string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
@@ -72,9 +64,8 @@ func envString(name, fallback string) string {
 	return fallback
 }
 
-// seconds returns the interval taken from the environment variable name,
-// or from flagValue if the variable is unset or empty.
-// The result must be at least min seconds.
+// seconds берёт интервал из переменной окружения name, а если её нет — из флага.
+// Значение не должно быть меньше min секунд.
 func seconds(name string, flagValue, min int) (time.Duration, error) {
 	n := flagValue
 	if v := os.Getenv(name); v != "" {
