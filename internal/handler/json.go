@@ -8,52 +8,67 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
-func writeJSON(w http.ResponseWriter, m model.Metrics) {
+// maxBodySize limits the size of a JSON request body.
+const maxBodySize = 1 << 20
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(m); err != nil {
-		log.Printf("error encoding response: %v\n", err)
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("error encoding response: %v", err)
 	}
 }
 
-// UpdateMetricJSON обрабатывает POST /update: принимает метрику в JSON и возвращает её актуальное значение.
-func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func decodeMetrics(w http.ResponseWriter, r *http.Request) (model.Metrics, bool) {
 	var m model.Metrics
-	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodySize)).Decode(&m); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json")
+		return m, false
+	}
+	return m, true
+}
+
+// UpdateMetricJSON handles POST /update: it stores a metric sent as JSON and returns its current value.
+func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
+	m, ok := decodeMetrics(w, r)
+	if !ok {
 		return
 	}
 	if m.ID == "" {
-		http.Error(w, "metric id is required", http.StatusNotFound)
+		writeJSONError(w, http.StatusNotFound, "metric id is required")
 		return
 	}
 
 	switch m.MType {
 	case model.Gauge:
 		if m.Value == nil {
-			http.Error(w, "gauge value is required", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "gauge value is required")
 			return
 		}
 		h.storage.UpdateGauge(m.ID, *m.Value)
 	case model.Counter:
 		if m.Delta == nil {
-			http.Error(w, "counter delta is required", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "counter delta is required")
 			return
 		}
 		total := h.storage.UpdateCounter(m.ID, *m.Delta)
 		m.Delta = &total
 	default:
-		http.Error(w, "unknown metric type", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "unknown metric type")
 		return
 	}
 
-	writeJSON(w, m)
+	writeJSON(w, http.StatusOK, m)
 }
 
-// GetMetricJSON обрабатывает POST /value: по id и type возвращает метрику с заполненным значением.
+// GetMetricJSON handles POST /value: it returns the metric with the given id and type, with its value filled in.
 func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
-	var m model.Metrics
-	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	m, ok := decodeMetrics(w, r)
+	if !ok {
 		return
 	}
 
@@ -61,21 +76,21 @@ func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	case model.Gauge:
 		value, ok := h.storage.GetGauge(m.ID)
 		if !ok {
-			http.Error(w, "gauge not found", http.StatusNotFound)
+			writeJSONError(w, http.StatusNotFound, "gauge not found")
 			return
 		}
 		m.Value = &value
 	case model.Counter:
 		delta, ok := h.storage.GetCounter(m.ID)
 		if !ok {
-			http.Error(w, "counter not found", http.StatusNotFound)
+			writeJSONError(w, http.StatusNotFound, "counter not found")
 			return
 		}
 		m.Delta = &delta
 	default:
-		http.Error(w, "unknown metric type", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "unknown metric type")
 		return
 	}
 
-	writeJSON(w, m)
+	writeJSON(w, http.StatusOK, m)
 }

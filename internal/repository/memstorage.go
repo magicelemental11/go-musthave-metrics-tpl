@@ -77,12 +77,10 @@ func (m *MemStorage) Snapshot() []model.Metrics {
 	defer m.mu.RUnlock()
 	result := make([]model.Metrics, 0, len(m.gauges)+len(m.counters))
 	for name, value := range m.gauges {
-		v := value
-		result = append(result, model.Metrics{ID: name, MType: model.Gauge, Value: &v})
+		result = append(result, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
 	}
 	for name, value := range m.counters {
-		d := value
-		result = append(result, model.Metrics{ID: name, MType: model.Counter, Delta: &d})
+		result = append(result, model.Metrics{ID: name, MType: model.Counter, Delta: &value})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].MType != result[j].MType {
@@ -93,14 +91,16 @@ func (m *MemStorage) Snapshot() []model.Metrics {
 	return result
 }
 
-// Restore записывает метрики в хранилище: gauge перезаписываются, counter прибавляются.
-func (m *MemStorage) Restore(metrics []model.Metrics) {
+// Load записывает метрики в хранилище, заменяя текущие значения.
+func (m *MemStorage) Load(metrics []model.Metrics) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, metric := range metrics {
 		switch {
 		case metric.MType == model.Gauge && metric.Value != nil:
-			m.UpdateGauge(metric.ID, *metric.Value)
+			m.gauges[metric.ID] = *metric.Value
 		case metric.MType == model.Counter && metric.Delta != nil:
-			m.UpdateCounter(metric.ID, *metric.Delta)
+			m.counters[metric.ID] = *metric.Delta
 		}
 	}
 }

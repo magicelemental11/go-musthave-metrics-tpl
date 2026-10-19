@@ -37,7 +37,9 @@ func TestFileStorageRestoreMissingFile(t *testing.T) {
 
 func TestFileStorageRestoreInvalidFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad.json")
-	os.WriteFile(path, []byte("not json"), 0o644)
+	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := NewFileStorage(NewMemStorage(), path, false).Restore(); err == nil {
 		t.Error("expected error for invalid file")
 	}
@@ -64,5 +66,36 @@ func TestFileStorageNoSaveWithoutSync(t *testing.T) {
 	NewFileStorage(NewMemStorage(), path, false).UpdateGauge("a", 1)
 	if _, err := os.Stat(path); err == nil {
 		t.Error("file must not be written when sync save is off")
+	}
+}
+
+func TestFileStorageSaveCreatesDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "dir", "metrics.json")
+	f := NewFileStorage(NewMemStorage(), path, false)
+	f.UpdateGauge("a", 1)
+	if err := f.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("file was not created: %v", err)
+	}
+}
+
+func TestFileStorageRestoreIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metrics.json")
+	src := NewFileStorage(NewMemStorage(), path, false)
+	src.UpdateCounter("NumGC", 42)
+	if err := src.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := NewFileStorage(NewMemStorage(), path, false)
+	for range 2 {
+		if err := dst.Restore(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v, _ := dst.GetCounter("NumGC"); v != 42 {
+		t.Errorf("counter = %d, want 42", v)
 	}
 }

@@ -13,8 +13,8 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
-// FileStorage оборачивает MemStorage и умеет сохранять метрики в JSON-файл.
-// При syncSave каждое обновление сразу записывается на диск.
+// FileStorage — MemStorage с сохранением в JSON-файл.
+// При syncSave каждое обновление сразу пишется на диск.
 type FileStorage struct {
 	*MemStorage
 	path     string
@@ -42,11 +42,11 @@ func (f *FileStorage) saveIfSync() {
 		return
 	}
 	if err := f.Save(); err != nil {
-		log.Printf("error saving metrics: %v\n", err)
+		log.Printf("error saving metrics: %v", err)
 	}
 }
 
-// Save атомарно записывает текущие метрики в файл: сначала во временный файл, затем rename.
+// Save записывает метрики во временный файл и переименовывает его, чтобы не испортить старый файл при сбое.
 func (f *FileStorage) Save() error {
 	f.saveMu.Lock()
 	defer f.saveMu.Unlock()
@@ -54,6 +54,10 @@ func (f *FileStorage) Save() error {
 	data, err := json.MarshalIndent(f.MemStorage.Snapshot(), "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal metrics: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
 	}
 
 	tmp, err := os.CreateTemp(filepath.Dir(f.path), filepath.Base(f.path)+".tmp-*")
@@ -66,6 +70,10 @@ func (f *FileStorage) Save() error {
 		tmp.Close()
 		return fmt.Errorf("write temp file: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
@@ -75,7 +83,7 @@ func (f *FileStorage) Save() error {
 	return nil
 }
 
-// Restore загружает метрики из файла. Если файла нет, это не ошибка.
+// Restore загружает метрики из файла. Отсутствие файла не считается ошибкой.
 func (f *FileStorage) Restore() error {
 	data, err := os.ReadFile(f.path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -88,6 +96,6 @@ func (f *FileStorage) Restore() error {
 	if err := json.Unmarshal(data, &metrics); err != nil {
 		return fmt.Errorf("parse %s: %w", f.path, err)
 	}
-	f.MemStorage.Restore(metrics)
+	f.MemStorage.Load(metrics)
 	return nil
 }

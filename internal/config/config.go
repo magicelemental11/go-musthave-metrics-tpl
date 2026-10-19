@@ -1,3 +1,4 @@
+// Package config читает настройки агента и сервера из флагов и переменных окружения.
 package config
 
 import (
@@ -5,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 const (
@@ -15,18 +17,18 @@ const (
 
 type ServerConfig struct {
 	Address         string
-	StoreInterval   int    // секунды; 0 означает синхронную запись
-	FileStoragePath string // пустая строка отключает сохранение
+	StoreInterval   time.Duration // 0 — синхронная запись
+	FileStoragePath string        // пустая строка отключает сохранение
 	Restore         bool
 }
 
 type AgentConfig struct {
 	Address        string
-	PollInterval   int
-	ReportInterval int
+	PollInterval   time.Duration
+	ReportInterval time.Duration
 }
 
-// Приоритет: переменная окружения -> флаг -> значение по умолчанию.
+// LoadServer собирает настройки сервера. Приоритет: переменная окружения, флаг, значение по умолчанию.
 func LoadServer(args []string) (ServerConfig, error) {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
@@ -37,35 +39,31 @@ func LoadServer(args []string) (ServerConfig, error) {
 		return ServerConfig{}, err
 	}
 
-	cfg := ServerConfig{
-		Address:         *address,
-		StoreInterval:   *storeInterval,
-		FileStoragePath: *filePath,
-		Restore:         *restore,
+	interval, err := seconds("STORE_INTERVAL", *storeInterval, 0)
+	if err != nil {
+		return ServerConfig{}, err
 	}
-	if v, ok := os.LookupEnv("ADDRESS"); ok && v != "" {
-		cfg.Address = v
-	}
-	if v, ok := os.LookupEnv("STORE_INTERVAL"); ok && v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 {
-			return ServerConfig{}, fmt.Errorf("STORE_INTERVAL must be a non-negative integer (seconds), got %q", v)
-		}
-		cfg.StoreInterval = n
-	}
-	if v, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
-		cfg.FileStoragePath = v
-	}
-	if v, ok := os.LookupEnv("RESTORE"); ok && v != "" {
-		b, err := strconv.ParseBool(v)
+	restoreValue := *restore
+	if v := os.Getenv("RESTORE"); v != "" {
+		restoreValue, err = strconv.ParseBool(v)
 		if err != nil {
 			return ServerConfig{}, fmt.Errorf("RESTORE must be true or false, got %q", v)
 		}
-		cfg.Restore = b
 	}
-	return cfg, nil
+	filePathValue := *filePath
+	if v, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
+		filePathValue = v
+	}
+
+	return ServerConfig{
+		Address:         envString("ADDRESS", *address),
+		StoreInterval:   interval,
+		FileStoragePath: filePathValue,
+		Restore:         restoreValue,
+	}, nil
 }
 
+// LoadAgent собирает настройки агента. Приоритет: переменная окружения, флаг, значение по умолчанию.
 func LoadAgent(args []string) (AgentConfig, error) {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
@@ -75,28 +73,43 @@ func LoadAgent(args []string) (AgentConfig, error) {
 		return AgentConfig{}, err
 	}
 
-	cfg := AgentConfig{Address: *address, PollInterval: *poll, ReportInterval: *report}
-	if v, ok := os.LookupEnv("ADDRESS"); ok && v != "" {
-		cfg.Address = v
-	}
-	if err := envSeconds("POLL_INTERVAL", &cfg.PollInterval); err != nil {
+	pollInterval, err := seconds("POLL_INTERVAL", *poll, 1)
+	if err != nil {
 		return AgentConfig{}, err
 	}
-	if err := envSeconds("REPORT_INTERVAL", &cfg.ReportInterval); err != nil {
+	reportInterval, err := seconds("REPORT_INTERVAL", *report, 1)
+	if err != nil {
 		return AgentConfig{}, err
 	}
-	return cfg, nil
+
+	return AgentConfig{
+		Address:        envString("ADDRESS", *address),
+		PollInterval:   pollInterval,
+		ReportInterval: reportInterval,
+	}, nil
 }
 
-func envSeconds(name string, dst *int) error {
-	v, ok := os.LookupEnv(name)
-	if !ok || v == "" {
-		return nil
+// envString возвращает переменную окружения name или fallback, если она не задана.
+func envString(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
 	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
-		return fmt.Errorf("%s must be a positive integer (seconds), got %q", name, v)
+	return fallback
+}
+
+// seconds берёт интервал из переменной окружения name, а если её нет — из флага.
+// Значение должно быть не меньше min секунд.
+func seconds(name string, flagValue, min int) (time.Duration, error) {
+	n := flagValue
+	if v := os.Getenv(name); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be an integer number of seconds, got %q", name, v)
+		}
+		n = parsed
 	}
-	*dst = n
-	return nil
+	if n < min {
+		return 0, fmt.Errorf("%s (or its flag) must be at least %d seconds, got %d", name, min, n)
+	}
+	return time.Duration(n) * time.Second, nil
 }
