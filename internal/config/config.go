@@ -1,3 +1,5 @@
+// Package config loads agent and server settings from command-line flags
+// and environment variables.
 package config
 
 import (
@@ -5,21 +7,25 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 const defaultAddress = "localhost:8080"
 
+// ServerConfig holds the server settings.
 type ServerConfig struct {
 	Address string
 }
 
+// AgentConfig holds the agent settings.
 type AgentConfig struct {
 	Address        string
-	PollInterval   int
-	ReportInterval int
+	PollInterval   time.Duration
+	ReportInterval time.Duration
 }
 
-// Приоритет: переменная окружения -> флаг -> значение по умолчанию.
+// LoadServer builds the server settings from args (flags) and the environment.
+// Priority: environment variable, then flag, then default value.
 func LoadServer(args []string) (ServerConfig, error) {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
@@ -27,13 +33,11 @@ func LoadServer(args []string) (ServerConfig, error) {
 		return ServerConfig{}, err
 	}
 
-	cfg := ServerConfig{Address: *address}
-	if v, ok := os.LookupEnv("ADDRESS"); ok && v != "" {
-		cfg.Address = v
-	}
-	return cfg, nil
+	return ServerConfig{Address: envString("ADDRESS", *address)}, nil
 }
 
+// LoadAgent builds the agent settings from args (flags) and the environment.
+// Priority: environment variable, then flag, then default value.
 func LoadAgent(args []string) (AgentConfig, error) {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
@@ -43,28 +47,45 @@ func LoadAgent(args []string) (AgentConfig, error) {
 		return AgentConfig{}, err
 	}
 
-	cfg := AgentConfig{Address: *address, PollInterval: *poll, ReportInterval: *report}
-	if v, ok := os.LookupEnv("ADDRESS"); ok && v != "" {
-		cfg.Address = v
-	}
-	if err := envSeconds("POLL_INTERVAL", &cfg.PollInterval); err != nil {
+	pollInterval, err := seconds("POLL_INTERVAL", *poll, 1)
+	if err != nil {
 		return AgentConfig{}, err
 	}
-	if err := envSeconds("REPORT_INTERVAL", &cfg.ReportInterval); err != nil {
+	reportInterval, err := seconds("REPORT_INTERVAL", *report, 1)
+	if err != nil {
 		return AgentConfig{}, err
 	}
-	return cfg, nil
+
+	return AgentConfig{
+		Address:        envString("ADDRESS", *address),
+		PollInterval:   pollInterval,
+		ReportInterval: reportInterval,
+	}, nil
 }
 
-func envSeconds(name string, dst *int) error {
-	v, ok := os.LookupEnv(name)
-	if !ok || v == "" {
-		return nil
+// envString returns the value of the environment variable name,
+// or fallback if it is unset or empty.
+func envString(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
 	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
-		return fmt.Errorf("%s must be a positive integer (seconds), got %q", name, v)
+	return fallback
+}
+
+// seconds returns the interval taken from the environment variable name,
+// or from flagValue if the variable is unset or empty.
+// The result must be at least min seconds.
+func seconds(name string, flagValue, min int) (time.Duration, error) {
+	n := flagValue
+	if v := os.Getenv(name); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be an integer number of seconds, got %q", name, v)
+		}
+		n = parsed
 	}
-	*dst = n
-	return nil
+	if n < min {
+		return 0, fmt.Errorf("%s (or its flag) must be at least %d seconds, got %d", name, min, n)
+	}
+	return time.Duration(n) * time.Second, nil
 }
