@@ -15,7 +15,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	a := agent.NewAgent()
+	a := agent.NewAgent(cfg.Key)
 
 	pollTicker := time.NewTicker(cfg.PollInterval)
 	defer pollTicker.Stop()

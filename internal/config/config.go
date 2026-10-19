@@ -20,12 +20,14 @@ type ServerConfig struct {
 	FileStoragePath string        // пустая строка отключает сохранение
 	Restore         bool
 	DatabaseDSN     string // пустая строка — БД не используется
+	Key             string // пустая строка — подпись отключена
 }
 
 type AgentConfig struct {
 	Address        string
 	PollInterval   time.Duration
 	ReportInterval time.Duration
+	Key            string
 }
 
 // LoadServer: приоритет — переменная окружения, флаг, значение по умолчанию.
@@ -36,6 +38,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 	filePath := fs.String("f", defaultFileStoragePath, "file storage path (empty - disabled)")
 	restore := fs.Bool("r", true, "restore metrics from file on start")
 	dsn := fs.String("d", "", "database DSN (empty - disabled)")
+	key := fs.String("k", "", "signing key (empty - disabled)")
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
@@ -62,6 +65,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 		FileStoragePath: filePathValue,
 		Restore:         restoreValue,
 		DatabaseDSN:     envString("DATABASE_DSN", *dsn),
+		Key:             envString("KEY", *key),
 	}, nil
 }
 
@@ -71,6 +75,7 @@ func LoadAgent(args []string) (AgentConfig, error) {
 	address := fs.String("a", defaultAddress, "server address")
 	poll := fs.Int("p", 2, "poll interval in seconds")
 	report := fs.Int("r", 10, "report interval in seconds")
+	key := fs.String("k", "", "signing key (empty - disabled)")
 	if err := fs.Parse(args); err != nil {
 		return AgentConfig{}, err
 	}
@@ -88,6 +93,7 @@ func LoadAgent(args []string) (AgentConfig, error) {
 		Address:        envString("ADDRESS", *address),
 		PollInterval:   pollInterval,
 		ReportInterval: reportInterval,
+		Key:            envString("KEY", *key),
 	}, nil
 }
 

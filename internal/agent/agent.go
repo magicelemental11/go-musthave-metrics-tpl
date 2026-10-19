@@ -19,6 +19,7 @@ import (
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/sign"
 )
 
 const requestTimeout = 10 * time.Second
@@ -31,10 +32,12 @@ type Agent struct {
 	stats     runtime.MemStats
 	gauges    map[string]float64
 	delays    []time.Duration
+	key       string
 }
 
-func NewAgent() *Agent {
+func NewAgent(key string) *Agent {
 	return &Agent{
+		key:    key,
 		gauges: make(map[string]float64),
 		delays: retry.DefaultDelays,
 	}
@@ -102,7 +105,7 @@ func (a *Agent) ReportMetrics(serverAddr string) {
 
 	var status int
 	err := retry.Do(context.Background(), a.delays, func() (err error) {
-		status, err = sendBatch(serverAddr+"/updates/", batch)
+		status, err = sendBatch(serverAddr+"/updates/", a.key, batch)
 		return err
 	}, isTransientNetErr)
 	if err != nil {
@@ -127,7 +130,7 @@ func isTransientNetErr(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-func sendBatch(url string, batch []model.Metrics) (int, error) {
+func sendBatch(url, key string, batch []model.Metrics) (int, error) {
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return 0, fmt.Errorf("marshal: %w", err)
@@ -147,6 +150,9 @@ func sendBatch(url string, batch []model.Metrics) (int, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+	if key != "" {
+		req.Header.Set(sign.Header, sign.Sign(key, buf.Bytes()))
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("post: %w", err)

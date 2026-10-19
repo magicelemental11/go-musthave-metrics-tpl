@@ -18,10 +18,11 @@ import (
 	"time"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/sign"
 )
 
 func TestCollectMetrics(t *testing.T) {
-	a := NewAgent()
+	a := NewAgent("")
 
 	a.CollectMetrics()
 
@@ -66,7 +67,7 @@ func TestReportMetrics(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	a := NewAgent()
+	a := NewAgent("")
 	a.CollectMetrics()
 	a.ReportMetrics(ts.URL)
 
@@ -87,7 +88,7 @@ func TestReportMetricsKeepsPollCountOnFailure(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	a := NewAgent()
+	a := NewAgent("")
 	a.CollectMetrics()
 	a.ReportMetrics(ts.URL)
 
@@ -102,13 +103,13 @@ func TestReportMetricsSkipsEmptyBatch(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	NewAgent().ReportMetrics(ts.URL)
+	NewAgent("").ReportMetrics(ts.URL)
 }
 
 var shortDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 
 func newTestAgent() *Agent {
-	a := NewAgent()
+	a := NewAgent("")
 	a.delays = shortDelays
 	a.CollectMetrics()
 	return a
@@ -243,5 +244,28 @@ func TestIsTransientNetErr(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestReportMetricsSignsBody(t *testing.T) {
+	for _, key := range []string{"secret", ""} {
+		var header string
+		var ok bool
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			header = r.Header.Get(sign.Header)
+			ok = sign.Valid(key, body, header)
+		}))
+		a := NewAgent(key)
+		a.CollectMetrics()
+		a.ReportMetrics(ts.URL)
+		ts.Close()
+
+		if key == "" && header != "" {
+			t.Errorf("header must be absent without key, got %q", header)
+		}
+		if key != "" && !ok {
+			t.Errorf("header %q does not match body", header)
+		}
 	}
 }

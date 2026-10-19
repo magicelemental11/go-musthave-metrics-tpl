@@ -80,6 +80,7 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logging(logger))
+	r.Use(middleware.Sign(cfg.Key))
 	r.Use(middleware.Gzip)
 
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetric)
