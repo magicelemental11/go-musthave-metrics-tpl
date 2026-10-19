@@ -1,6 +1,11 @@
 package repository
 
-import "sync"
+import (
+	"sort"
+	"sync"
+
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
+)
 
 type Storage interface {
 	GetGauge(name string) (float64, bool)
@@ -64,4 +69,38 @@ func (m *MemStorage) GetAllMetrics() (map[string]float64, map[string]int64) {
 		counters[k] = v
 	}
 	return gauges, counters
+}
+
+// Snapshot возвращает все метрики списком, отсортированным по типу и имени.
+func (m *MemStorage) Snapshot() []model.Metrics {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]model.Metrics, 0, len(m.gauges)+len(m.counters))
+	for name, value := range m.gauges {
+		v := value
+		result = append(result, model.Metrics{ID: name, MType: model.Gauge, Value: &v})
+	}
+	for name, value := range m.counters {
+		d := value
+		result = append(result, model.Metrics{ID: name, MType: model.Counter, Delta: &d})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].MType != result[j].MType {
+			return result[i].MType < result[j].MType
+		}
+		return result[i].ID < result[j].ID
+	})
+	return result
+}
+
+// Restore записывает метрики в хранилище: gauge перезаписываются, counter прибавляются.
+func (m *MemStorage) Restore(metrics []model.Metrics) {
+	for _, metric := range metrics {
+		switch {
+		case metric.MType == model.Gauge && metric.Value != nil:
+			m.UpdateGauge(metric.ID, *metric.Value)
+		case metric.MType == model.Counter && metric.Delta != nil:
+			m.UpdateCounter(metric.ID, *metric.Delta)
+		}
+	}
 }
