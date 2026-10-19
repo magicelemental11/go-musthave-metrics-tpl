@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -54,6 +55,25 @@ func (m *MemStorage) UpdateCounter(_ context.Context, name string, value int64) 
 	defer m.mu.Unlock()
 	m.counters[name] += value
 	return m.counters[name], nil
+}
+
+func (m *MemStorage) UpdateBatch(_ context.Context, metrics []model.Metrics) error {
+	for _, m := range metrics {
+		if err := m.Validate(); err != nil {
+			return fmt.Errorf("invalid metric %q: %w", m.ID, err)
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, metric := range metrics {
+		switch metric.MType {
+		case model.Gauge:
+			m.gauges[metric.ID] = *metric.Value
+		case model.Counter:
+			m.counters[metric.ID] += *metric.Delta
+		}
+	}
+	return nil
 }
 
 // GetAllMetrics возвращает копии внутренних карт.
