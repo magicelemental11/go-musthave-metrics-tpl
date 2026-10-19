@@ -1,21 +1,23 @@
 package main
 
 import (
-	"flag"
+	"log"
+	"os"
 	"time"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/agent"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 )
 
 func main() {
-	address := flag.String("a", "localhost:8080", "server address")
-	pollInterval := flag.Int("p", 2, "poll interval in seconds")
-	reportInterval := flag.Int("r", 10, "report interval in seconds")
-	flag.Parse()
+	cfg, err := config.LoadAgent(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	a := agent.NewAgent()
 
-	pollTicker := time.NewTicker(time.Duration(*pollInterval) * time.Second)
+	pollTicker := time.NewTicker(time.Duration(cfg.PollInterval) * time.Second)
 	defer pollTicker.Stop()
 
 	go func() {
@@ -24,10 +26,10 @@ func main() {
 		}
 	}()
 
-	reportTicker := time.NewTicker(time.Duration(*reportInterval) * time.Second)
+	reportTicker := time.NewTicker(time.Duration(cfg.ReportInterval) * time.Second)
 	defer reportTicker.Stop()
 
 	for range reportTicker.C {
-		a.ReportMetrics("http://" + *address)
+		a.ReportMetrics("http://" + cfg.Address)
 	}
 }
