@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
@@ -25,7 +31,33 @@ func main() {
 	}
 	defer logger.Sync()
 
-	storage := repository.NewMemStorage()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	var wg sync.WaitGroup
+
+	mem := repository.NewMemStorage()
+	var storage repository.Storage = mem
+	var fileStorage *repository.FileStorage
+
+	if cfg.FileStoragePath != "" {
+		fileStorage = repository.NewFileStorage(mem, cfg.FileStoragePath, cfg.StoreInterval == 0)
+		storage = fileStorage
+
+		if cfg.Restore {
+			if err := fileStorage.Restore(); err != nil {
+				log.Printf("restore failed: %v", err)
+			}
+		}
+		if cfg.StoreInterval > 0 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				savePeriodically(ctx, fileStorage, cfg.StoreInterval)
+			}()
+		}
+	}
+
 	h := handler.NewHandler(storage)
 
 	r := chi.NewRouter()
@@ -45,6 +77,53 @@ func main() {
 
 	r.Get("/", h.GetAllMetrics)
 
+	srv := &http.Server{
+		Addr:              cfg.Address,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
 	log.Println("Server address:", cfg.Address)
-	http.ListenAndServe(cfg.Address, r)
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Println("shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown error: %v", err)
+		}
+	}
+
+	stop()
+	wg.Wait() // фоновое сохранение должно закончиться до финального
+
+	if fileStorage != nil {
+		if err := fileStorage.Save(); err != nil {
+			log.Printf("final save failed: %v", err)
+		}
+	}
+}
+
+func savePeriodically(ctx context.Context, s *repository.FileStorage, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.Save(); err != nil {
+				log.Printf("periodic save failed: %v", err)
+			}
+		}
+	}
 }

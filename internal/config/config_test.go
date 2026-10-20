@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -27,6 +28,56 @@ func TestLoadServerPriority(t *testing.T) {
 			t.Fatalf("got %+v, %v", cfg, err)
 		}
 	})
+}
+
+func clearServerEnv(t *testing.T) {
+	for _, name := range []string{"ADDRESS", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE"} {
+		t.Setenv(name, "") // запоминает исходное значение для восстановления
+		os.Unsetenv(name)
+	}
+}
+
+func TestLoadServerStorageDefaults(t *testing.T) {
+	clearServerEnv(t)
+	cfg, err := LoadServer(nil)
+	want := ServerConfig{Address: "localhost:8080", StoreInterval: 300 * time.Second, FileStoragePath: "metrics-db.json", Restore: true}
+	if err != nil || cfg != want {
+		t.Fatalf("got %+v, %v", cfg, err)
+	}
+}
+
+func TestLoadServerStorageFlags(t *testing.T) {
+	clearServerEnv(t)
+	cfg, err := LoadServer([]string{"-i", "0", "-f", "/tmp/m.json", "-r=false"})
+	want := ServerConfig{Address: "localhost:8080", StoreInterval: 0, FileStoragePath: "/tmp/m.json", Restore: false}
+	if err != nil || cfg != want {
+		t.Fatalf("got %+v, %v", cfg, err)
+	}
+}
+
+func TestLoadServerStorageEnvOverFlags(t *testing.T) {
+	clearServerEnv(t)
+	t.Setenv("STORE_INTERVAL", "0")
+	t.Setenv("FILE_STORAGE_PATH", "/env/m.json")
+	t.Setenv("RESTORE", "false")
+	cfg, err := LoadServer([]string{"-i", "10", "-f", "/flag/m.json", "-r=true"})
+	want := ServerConfig{Address: "localhost:8080", StoreInterval: 0, FileStoragePath: "/env/m.json", Restore: false}
+	if err != nil || cfg != want {
+		t.Fatalf("got %+v, %v", cfg, err)
+	}
+}
+
+func TestLoadServerStorageInvalidEnv(t *testing.T) {
+	clearServerEnv(t)
+	t.Setenv("STORE_INTERVAL", "-1")
+	if _, err := LoadServer(nil); err == nil {
+		t.Error("expected error for negative STORE_INTERVAL")
+	}
+	t.Setenv("STORE_INTERVAL", "")
+	t.Setenv("RESTORE", "maybe")
+	if _, err := LoadServer(nil); err == nil {
+		t.Error("expected error for invalid RESTORE")
+	}
 }
 
 func TestLoadAgentPriority(t *testing.T) {

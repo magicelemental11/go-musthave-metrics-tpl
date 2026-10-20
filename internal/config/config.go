@@ -8,10 +8,17 @@ import (
 	"time"
 )
 
-const defaultAddress = "localhost:8080"
+const (
+	defaultAddress         = "localhost:8080"
+	defaultStoreInterval   = 300
+	defaultFileStoragePath = "metrics-db.json"
+)
 
 type ServerConfig struct {
-	Address string
+	Address         string
+	StoreInterval   time.Duration // 0 — синхронная запись
+	FileStoragePath string        // пустая строка отключает сохранение
+	Restore         bool
 }
 
 type AgentConfig struct {
@@ -24,11 +31,35 @@ type AgentConfig struct {
 func LoadServer(args []string) (ServerConfig, error) {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
+	storeInterval := fs.Int("i", defaultStoreInterval, "store interval in seconds (0 - synchronous)")
+	filePath := fs.String("f", defaultFileStoragePath, "file storage path (empty - disabled)")
+	restore := fs.Bool("r", true, "restore metrics from file on start")
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
 
-	return ServerConfig{Address: envString("ADDRESS", *address)}, nil
+	interval, err := seconds("STORE_INTERVAL", *storeInterval, 0)
+	if err != nil {
+		return ServerConfig{}, err
+	}
+	restoreValue := *restore
+	if v := os.Getenv("RESTORE"); v != "" {
+		restoreValue, err = strconv.ParseBool(v)
+		if err != nil {
+			return ServerConfig{}, fmt.Errorf("RESTORE must be true or false, got %q", v)
+		}
+	}
+	filePathValue := *filePath
+	if v, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
+		filePathValue = v
+	}
+
+	return ServerConfig{
+		Address:         envString("ADDRESS", *address),
+		StoreInterval:   interval,
+		FileStoragePath: filePathValue,
+		Restore:         restoreValue,
+	}, nil
 }
 
 // LoadAgent: приоритет — переменная окружения, флаг, значение по умолчанию.
