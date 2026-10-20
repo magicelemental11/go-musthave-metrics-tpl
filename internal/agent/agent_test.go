@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -38,8 +39,17 @@ func TestReportMetrics(t *testing.T) {
 		if r.URL.Path != "/update" || r.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("unexpected request: %s, content-type %q", r.URL.Path, r.Header.Get("Content-Type"))
 		}
+		if r.Header.Get("Content-Encoding") != "gzip" {
+			t.Errorf("request body is not gzip-encoded")
+		}
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("invalid gzip body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		var m model.Metrics
-		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		if err := json.NewDecoder(zr).Decode(&m); err != nil {
 			t.Errorf("invalid json body: %v", err)
 		}
 		w.WriteHeader(http.StatusOK)
