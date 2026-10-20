@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
@@ -36,11 +38,25 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	mem := repository.NewMemStorage()
-	var storage repository.Storage = mem
+	var pinger handler.Pinger
+	var storage repository.Storage
 	var fileStorage *repository.FileStorage
 
-	if cfg.FileStoragePath != "" {
+	switch backendFor(cfg) {
+	case backendPostgres:
+		// sql.Open не подключается к БД, соединение проверит Migrate.
+		db, err := sql.Open("pgx", cfg.DatabaseDSN)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer db.Close()
+		if err := repository.Migrate(db); err != nil {
+			log.Fatalf("migrations failed: %v", err)
+		}
+		pinger = db
+		storage = repository.NewPgStorage(db)
+	case backendFile:
+		mem := repository.NewMemStorage()
 		fileStorage = repository.NewFileStorage(mem, cfg.FileStoragePath, cfg.StoreInterval == 0)
 		storage = fileStorage
 
@@ -56,12 +72,15 @@ func main() {
 				savePeriodically(ctx, fileStorage, cfg.StoreInterval)
 			}()
 		}
+	default:
+		storage = repository.NewMemStorage()
 	}
 
-	h := handler.NewHandler(storage)
+	h := handler.NewHandler(storage, pinger)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logging(logger))
+	r.Use(middleware.Sign(cfg.Key))
 	r.Use(middleware.Gzip)
 
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetric)
@@ -71,9 +90,12 @@ func main() {
 	r.Post("/update/", http.NotFound)
 
 	r.Post("/update", h.UpdateMetricJSON)
+	r.Post("/updates/", h.UpdateMetricsBatch)
 	r.Post("/value", h.GetMetricJSON)
 
 	r.Get("/value/{type}/{name}", h.GetMetric)
+
+	r.Get("/ping", h.Ping)
 
 	r.Get("/", h.GetAllMetrics)
 
@@ -110,6 +132,23 @@ func main() {
 		if err := fileStorage.Save(); err != nil {
 			log.Printf("final save failed: %v", err)
 		}
+	}
+}
+
+const (
+	backendPostgres = "postgres"
+	backendFile     = "file"
+	backendMemory   = "memory"
+)
+
+func backendFor(cfg config.ServerConfig) string {
+	switch {
+	case cfg.DatabaseDSN != "":
+		return backendPostgres
+	case cfg.FileStoragePath != "":
+		return backendFile
+	default:
+		return backendMemory
 	}
 }
 
