@@ -1,14 +1,25 @@
 package agent
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
 	"runtime"
+	"sync"
+	"time"
+
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
+const requestTimeout = 10 * time.Second
+
+var httpClient = &http.Client{Timeout: requestTimeout}
+
 type Agent struct {
+	mu        sync.Mutex
 	pollCount int64
 	stats     runtime.MemStats
 	gauges    map[string]float64
@@ -21,6 +32,8 @@ func NewAgent() *Agent {
 }
 
 func (a *Agent) CollectMetrics() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	runtime.ReadMemStats(&a.stats)
 	a.pollCount++
 	a.gauges["Alloc"] = float64(a.stats.Alloc)
@@ -53,27 +66,53 @@ func (a *Agent) CollectMetrics() {
 	a.gauges["RandomValue"] = rand.Float64()
 }
 
-func (a *Agent) ReportMetrics(serverAddr string) {
+func (a *Agent) snapshot() (map[string]float64, int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	gauges := make(map[string]float64, len(a.gauges))
 	for name, value := range a.gauges {
-		url := fmt.Sprintf("%s/update/gauge/%s/%v", serverAddr, name, value)
-		resp, err := http.Post(url, "text/plain", nil)
+		gauges[name] = value
+	}
+	return gauges, a.pollCount
+}
+
+// Во время отправки мьютекс не держим, чтобы сбор метрик не блокировался медленным сервером.
+func (a *Agent) ReportMetrics(serverAddr string) {
+	gauges, pollCount := a.snapshot()
+	url := serverAddr + "/update"
+
+	for name, value := range gauges {
+		status, err := sendMetric(url, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
 		if err != nil {
-			log.Printf("error sending %s: %v\n", name, err)
+			log.Printf("error sending %s: %v", name, err)
 			continue
 		}
-		resp.Body.Close()
-		log.Printf("sent gauge %s = %v → %d\n", name, value, resp.StatusCode)
+		log.Printf("sent gauge %s = %v → %d", name, value, status)
 	}
 
-	url := fmt.Sprintf("%s/update/counter/PollCount/%d", serverAddr, a.pollCount)
-	resp, err := http.Post(url, "text/plain", nil)
+	status, err := sendMetric(url, model.Metrics{ID: "PollCount", MType: model.Counter, Delta: &pollCount})
 	if err != nil {
-		log.Printf("error sending PollCount: %v\n", err)
+		log.Printf("error sending PollCount: %v", err)
 		return
 	}
-	resp.Body.Close()
-	log.Printf("sent counter PollCount = %d → %d\n", a.pollCount, resp.StatusCode)
-	if resp.StatusCode == http.StatusOK {
-		a.pollCount = 0
+	log.Printf("sent counter PollCount = %d → %d", pollCount, status)
+	if status == http.StatusOK {
+		// Вычитаем только отправленное: опросы, сделанные во время отправки, не теряем.
+		a.mu.Lock()
+		a.pollCount -= pollCount
+		a.mu.Unlock()
 	}
+}
+
+func sendMetric(url string, m model.Metrics) (int, error) {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return 0, fmt.Errorf("marshal: %w", err)
+	}
+	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("post: %w", err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
 }

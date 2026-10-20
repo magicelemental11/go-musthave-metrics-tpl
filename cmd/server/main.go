@@ -37,6 +37,9 @@ func main() {
 	r.Post("/update/{type}/", http.NotFound)
 	r.Post("/update/", http.NotFound)
 
+	r.Post("/update", h.UpdateMetricJSON)
+	r.Post("/value", h.GetMetricJSON)
+
 	r.Get("/value/{type}/{name}", h.GetMetric)
 
 	r.Get("/", h.GetAllMetrics)

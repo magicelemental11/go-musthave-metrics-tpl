@@ -1,9 +1,12 @@
 package agent
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
 func TestCollectMetrics(t *testing.T) {
@@ -32,6 +35,13 @@ func TestReportMetrics(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
+		if r.URL.Path != "/update" || r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("unexpected request: %s, content-type %q", r.URL.Path, r.Header.Get("Content-Type"))
+		}
+		var m model.Metrics
+		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+			t.Errorf("invalid json body: %v", err)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
