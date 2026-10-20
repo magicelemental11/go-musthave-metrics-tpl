@@ -1,18 +1,21 @@
 package main
 
 import (
-	"flag"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
 )
 
 func main() {
-	address := flag.String("a", "localhost:8080", "server address")
-	flag.Parse()
+	cfg, err := config.LoadServer(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	storage := repository.NewMemStorage()
 	h := handler.NewHandler(storage)
@@ -29,6 +32,6 @@ func main() {
 
 	r.Get("/", h.GetAllMetrics)
 
-	log.Println("Server address:", *address)
-	http.ListenAndServe(*address, r)
+	log.Println("Server address:", cfg.Address)
+	http.ListenAndServe(cfg.Address, r)
 }
