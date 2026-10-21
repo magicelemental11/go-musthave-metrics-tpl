@@ -9,12 +9,14 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
+// MemStorage is a Storage that keeps metrics in memory. It is safe for concurrent use.
 type MemStorage struct {
 	mu       sync.RWMutex
 	gauges   map[string]float64
 	counters map[string]int64
 }
 
+// NewMemStorage creates an empty MemStorage.
 func NewMemStorage() *MemStorage {
 	return &MemStorage{
 		gauges:   make(map[string]float64),
@@ -22,6 +24,7 @@ func NewMemStorage() *MemStorage {
 	}
 }
 
+// GetGauge returns the gauge value or ErrNotFound.
 func (m *MemStorage) GetGauge(_ context.Context, name string) (float64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -32,6 +35,7 @@ func (m *MemStorage) GetGauge(_ context.Context, name string) (float64, error) {
 	return value, nil
 }
 
+// GetCounter returns the counter value or ErrNotFound.
 func (m *MemStorage) GetCounter(_ context.Context, name string) (int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -42,6 +46,7 @@ func (m *MemStorage) GetCounter(_ context.Context, name string) (int64, error) {
 	return value, nil
 }
 
+// UpdateGauge sets the gauge to value.
 func (m *MemStorage) UpdateGauge(_ context.Context, name string, value float64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -49,7 +54,7 @@ func (m *MemStorage) UpdateGauge(_ context.Context, name string, value float64) 
 	return nil
 }
 
-// UpdateCounter прибавляет value к счётчику и возвращает новое накопленное значение.
+// UpdateCounter adds value to the counter and returns the new total.
 func (m *MemStorage) UpdateCounter(_ context.Context, name string, value int64) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -57,6 +62,7 @@ func (m *MemStorage) UpdateCounter(_ context.Context, name string, value int64) 
 	return m.counters[name], nil
 }
 
+// UpdateBatch validates all metrics and then applies them under one lock.
 func (m *MemStorage) UpdateBatch(_ context.Context, metrics []model.Metrics) error {
 	for _, m := range metrics {
 		if err := m.Validate(); err != nil {
@@ -76,7 +82,7 @@ func (m *MemStorage) UpdateBatch(_ context.Context, metrics []model.Metrics) err
 	return nil
 }
 
-// GetAllMetrics возвращает копии внутренних карт.
+// GetAllMetrics returns copies of the gauge and counter maps.
 func (m *MemStorage) GetAllMetrics(_ context.Context) (map[string]float64, map[string]int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -91,7 +97,7 @@ func (m *MemStorage) GetAllMetrics(_ context.Context) (map[string]float64, map[s
 	return gauges, counters, nil
 }
 
-// Snapshot возвращает все метрики списком, отсортированным по типу и имени.
+// Snapshot returns all metrics as a list sorted by type and name.
 func (m *MemStorage) Snapshot() []model.Metrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -111,7 +117,7 @@ func (m *MemStorage) Snapshot() []model.Metrics {
 	return result
 }
 
-// Load записывает метрики в хранилище, заменяя текущие значения.
+// Load stores metrics, replacing the current values.
 func (m *MemStorage) Load(metrics []model.Metrics) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

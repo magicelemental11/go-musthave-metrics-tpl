@@ -20,11 +20,13 @@ const (
 		ON CONFLICT (id, type) DO UPDATE SET delta = metrics.delta + EXCLUDED.delta`
 )
 
+// PgStorage is a Storage backed by PostgreSQL. Queries are retried on connection errors.
 type PgStorage struct {
 	db     *sql.DB
 	delays []time.Duration
 }
 
+// NewPgStorage creates a PgStorage on top of db. The schema is created by Migrate.
 func NewPgStorage(db *sql.DB) *PgStorage {
 	return &PgStorage{db: db, delays: retry.DefaultDelays}
 }
@@ -33,6 +35,7 @@ func (p *PgStorage) do(ctx context.Context, fn func() error) error {
 	return retry.Do(ctx, p.delays, fn, isPgConnErr)
 }
 
+// GetGauge returns the gauge value or ErrNotFound.
 func (p *PgStorage) GetGauge(ctx context.Context, name string) (float64, error) {
 	var value float64
 	err := p.do(ctx, func() error {
@@ -48,6 +51,7 @@ func (p *PgStorage) GetGauge(ctx context.Context, name string) (float64, error) 
 	return value, nil
 }
 
+// GetCounter returns the counter value or ErrNotFound.
 func (p *PgStorage) GetCounter(ctx context.Context, name string) (int64, error) {
 	var delta int64
 	err := p.do(ctx, func() error {
@@ -63,6 +67,7 @@ func (p *PgStorage) GetCounter(ctx context.Context, name string) (int64, error) 
 	return delta, nil
 }
 
+// UpdateGauge sets the gauge to value.
 func (p *PgStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
 	err := p.do(ctx, func() error {
 		_, err := p.db.ExecContext(ctx, upsertGaugeSQL, name, model.Gauge, value)
@@ -74,6 +79,7 @@ func (p *PgStorage) UpdateGauge(ctx context.Context, name string, value float64)
 	return nil
 }
 
+// UpdateCounter adds value to the counter and returns the new total.
 func (p *PgStorage) UpdateCounter(ctx context.Context, name string, value int64) (int64, error) {
 	var total int64
 	err := p.do(ctx, func() error {
@@ -85,6 +91,7 @@ func (p *PgStorage) UpdateCounter(ctx context.Context, name string, value int64)
 	return total, nil
 }
 
+// GetAllMetrics returns all gauges and counters.
 func (p *PgStorage) GetAllMetrics(ctx context.Context) (map[string]float64, map[string]int64, error) {
 	var gauges map[string]float64
 	var counters map[string]int64
@@ -129,6 +136,7 @@ func (p *PgStorage) queryAll(ctx context.Context) (map[string]float64, map[strin
 	return gauges, counters, nil
 }
 
+// UpdateBatch validates all metrics and then applies them in a single transaction.
 func (p *PgStorage) UpdateBatch(ctx context.Context, metrics []model.Metrics) error {
 	for _, m := range metrics {
 		if err := m.Validate(); err != nil {

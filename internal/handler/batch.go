@@ -9,6 +9,8 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
+// UpdateMetricsBatch stores a JSON array of model.Metrics in one storage call.
+// The batch is validated first: a malformed, empty or invalid batch responds 400 and nothing is stored.
 func (h *Handler) UpdateMetricsBatch(w http.ResponseWriter, r *http.Request) {
 	var metrics []model.Metrics
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodySize)).Decode(&metrics); err != nil {
