@@ -31,7 +31,7 @@ func TestLoadServerPriority(t *testing.T) {
 }
 
 func clearServerEnv(t *testing.T) {
-	for _, name := range []string{"ADDRESS", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE"} {
+	for _, name := range []string{"ADDRESS", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE", "DATABASE_DSN"} {
 		t.Setenv(name, "") // запоминает исходное значение для восстановления
 		os.Unsetenv(name)
 	}
@@ -137,5 +137,22 @@ func TestLoadAgentInvalid(t *testing.T) {
 				t.Fatal("expected error")
 			}
 		})
+	}
+}
+
+func TestLoadServerDatabaseDSN(t *testing.T) {
+	clearServerEnv(t)
+	cfg, err := LoadServer(nil)
+	if err != nil || cfg.DatabaseDSN != "" {
+		t.Fatalf("default: got %+v, %v", cfg, err)
+	}
+	cfg, err = LoadServer([]string{"-d", "flag-dsn"})
+	if err != nil || cfg.DatabaseDSN != "flag-dsn" {
+		t.Fatalf("flag: got %+v, %v", cfg, err)
+	}
+	t.Setenv("DATABASE_DSN", "env-dsn")
+	cfg, err = LoadServer([]string{"-d", "flag-dsn"})
+	if err != nil || cfg.DatabaseDSN != "env-dsn" {
+		t.Fatalf("env: got %+v, %v", cfg, err)
 	}
 }

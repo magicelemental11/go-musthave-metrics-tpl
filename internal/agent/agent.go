@@ -3,16 +3,22 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
 )
 
 const requestTimeout = 10 * time.Second
@@ -24,11 +30,13 @@ type Agent struct {
 	pollCount int64
 	stats     runtime.MemStats
 	gauges    map[string]float64
+	delays    []time.Duration
 }
 
 func NewAgent() *Agent {
 	return &Agent{
 		gauges: make(map[string]float64),
+		delays: retry.DefaultDelays,
 	}
 }
 
@@ -80,24 +88,29 @@ func (a *Agent) snapshot() (map[string]float64, int64) {
 // Во время отправки мьютекс не держим, чтобы сбор метрик не блокировался медленным сервером.
 func (a *Agent) ReportMetrics(serverAddr string) {
 	gauges, pollCount := a.snapshot()
-	url := serverAddr + "/update"
 
+	batch := make([]model.Metrics, 0, len(gauges)+1)
 	for name, value := range gauges {
-		status, err := sendMetric(url, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
-		if err != nil {
-			log.Printf("error sending %s: %v", name, err)
-			continue
-		}
-		log.Printf("sent gauge %s = %v → %d", name, value, status)
+		batch = append(batch, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
 	}
-
-	status, err := sendMetric(url, model.Metrics{ID: "PollCount", MType: model.Counter, Delta: &pollCount})
-	if err != nil {
-		log.Printf("error sending PollCount: %v", err)
+	if pollCount > 0 {
+		batch = append(batch, model.Metrics{ID: "PollCount", MType: model.Counter, Delta: &pollCount})
+	}
+	if len(batch) == 0 {
 		return
 	}
-	log.Printf("sent counter PollCount = %d → %d", pollCount, status)
-	if status == http.StatusOK {
+
+	var status int
+	err := retry.Do(context.Background(), a.delays, func() (err error) {
+		status, err = sendBatch(serverAddr+"/updates/", batch)
+		return err
+	}, isTransientNetErr)
+	if err != nil {
+		log.Printf("error sending batch of %d metrics: %v", len(batch), err)
+		return
+	}
+	log.Printf("sent batch of %d metrics → %d", len(batch), status)
+	if status == http.StatusOK && pollCount > 0 {
 		// Вычитаем только отправленное: опросы, сделанные во время отправки, не теряем.
 		a.mu.Lock()
 		a.pollCount -= pollCount
@@ -105,8 +118,17 @@ func (a *Agent) ReportMetrics(serverAddr string) {
 	}
 }
 
-func sendMetric(url string, m model.Metrics) (int, error) {
-	body, err := json.Marshal(m)
+func isTransientNetErr(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func sendBatch(url string, batch []model.Metrics) (int, error) {
+	body, err := json.Marshal(batch)
 	if err != nil {
 		return 0, fmt.Errorf("marshal: %w", err)
 	}
