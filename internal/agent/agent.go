@@ -1,3 +1,4 @@
+// Package agent collects runtime and system metrics and reports them to the server.
 package agent
 
 import (
@@ -32,6 +33,7 @@ var (
 	gzipPool   = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
 )
 
+// Agent collects metrics and sends them to the server. It is safe for concurrent use.
 type Agent struct {
 	mu        sync.Mutex
 	pollCount int64
@@ -42,6 +44,8 @@ type Agent struct {
 	rateLimit int
 }
 
+// NewAgent creates an Agent. key signs requests (empty disables signing);
+// rateLimit bounds the number of concurrent requests to the server.
 func NewAgent(key string, rateLimit int) *Agent {
 	return &Agent{
 		key:       key,
@@ -51,6 +55,7 @@ func NewAgent(key string, rateLimit int) *Agent {
 	}
 }
 
+// CollectMetrics reads runtime.MemStats and increments PollCount.
 func (a *Agent) CollectMetrics() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -96,6 +101,7 @@ func (a *Agent) snapshot() (map[string]float64, int64) {
 	return gauges, a.pollCount
 }
 
+// CollectSystemMetrics reads total and free memory and per-CPU utilization via gopsutil.
 func (a *Agent) CollectSystemMetrics() error {
 	vm, err := mem.VirtualMemory()
 	if err != nil {
@@ -116,7 +122,8 @@ func (a *Agent) CollectSystemMetrics() error {
 	return nil
 }
 
-// Во время отправки мьютекс не держим, чтобы сбор метрик не блокировался медленным сервером.
+// ReportMetrics sends the collected metrics to serverAddr in batches through a bounded worker pool.
+// The mutex is not held while sending, so collection is not blocked by a slow server.
 func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 	gauges, pollCount := a.snapshot()
 
@@ -144,7 +151,7 @@ func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 		}
 		log.Printf("sent batch of %d metrics → %d", len(chunks[i]), status)
 		if i == 0 && status == http.StatusOK && pollCount > 0 {
-			// Вычитаем только отправленное: опросы, сделанные во время отправки, не теряем.
+			// Subtract only what was sent: polls made during sending are not lost.
 			a.mu.Lock()
 			a.pollCount -= pollCount
 			a.mu.Unlock()

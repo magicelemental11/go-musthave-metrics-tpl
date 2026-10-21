@@ -1,3 +1,4 @@
+// Package middleware provides HTTP middleware for logging, gzip compression and request signing.
 package middleware
 
 import (
@@ -60,8 +61,8 @@ func (w *compressWriter) close() error {
 	return err
 }
 
-// Gzip распаковывает запросы с Content-Encoding: gzip и сжимает ответы
-// application/json и text/html, если клиент прислал Accept-Encoding: gzip.
+// Gzip decompresses requests with Content-Encoding: gzip and compresses
+// application/json and text/html responses if the client sent Accept-Encoding: gzip.
 func Gzip(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
@@ -72,7 +73,7 @@ func Gzip(next http.Handler) http.Handler {
 			case err == nil:
 				defer zr.Close()
 				r.Body = zr
-			case !errors.Is(err, io.EOF): // пустое тело оставляем как есть
+			case !errors.Is(err, io.EOF): // leave an empty body as is
 				http.Error(w, "invalid gzip body", http.StatusBadRequest)
 				return
 			}

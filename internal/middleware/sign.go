@@ -24,6 +24,9 @@ func (w *signWriter) Write(b []byte) (int, error) {
 	return w.buf.Write(b)
 }
 
+// Sign verifies the HashSHA256 header of a request body and signs the response body.
+// A request with a wrong signature gets 400; a request without the header is not checked.
+// With an empty key the middleware is a no-op.
 func Sign(key string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if key == "" {

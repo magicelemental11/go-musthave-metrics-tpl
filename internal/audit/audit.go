@@ -1,3 +1,4 @@
+// Package audit publishes events about metric updates to registered observers.
 package audit
 
 import (
@@ -14,24 +15,30 @@ import (
 	"time"
 )
 
+// Event describes one successful update request.
 type Event struct {
 	TS        int64    `json:"ts"`
 	Metrics   []string `json:"metrics"`
 	IPAddress string   `json:"ip_address"`
 }
 
+// Observer receives published events. Observers that implement io.Closer are closed by Subject.Close.
 type Observer interface {
 	Notify(ctx context.Context, e Event) error
 }
 
+// Subject fans an Event out to attached observers.
 type Subject struct {
 	observers []Observer
 }
 
+// Attach registers o. It is not safe to call concurrently with Publish.
 func (s *Subject) Attach(o Observer) {
 	s.observers = append(s.observers, o)
 }
 
+// Publish notifies every observer in order. Observer errors are logged and do not stop delivery.
+// Publish on a nil Subject does nothing.
 func (s *Subject) Publish(ctx context.Context, e Event) {
 	if s == nil {
 		return
@@ -43,6 +50,7 @@ func (s *Subject) Publish(ctx context.Context, e Event) {
 	}
 }
 
+// Close closes all observers that implement io.Closer and joins their errors.
 func (s *Subject) Close() error {
 	var errs []error
 	for _, o := range s.observers {
@@ -53,11 +61,13 @@ func (s *Subject) Close() error {
 	return errors.Join(errs...)
 }
 
+// FileObserver appends each event as a JSON line to a file.
 type FileObserver struct {
 	mu sync.Mutex
 	f  *os.File
 }
 
+// NewFileObserver opens path for appending, creating it if needed.
 func NewFileObserver(path string) (*FileObserver, error) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -66,6 +76,7 @@ func NewFileObserver(path string) (*FileObserver, error) {
 	return &FileObserver{f: f}, nil
 }
 
+// Notify writes e as one JSON line.
 func (o *FileObserver) Notify(_ context.Context, e Event) error {
 	line, err := json.Marshal(e)
 	if err != nil {
@@ -81,19 +92,23 @@ func (o *FileObserver) Notify(_ context.Context, e Event) error {
 	return nil
 }
 
+// Close closes the file.
 func (o *FileObserver) Close() error {
 	return o.f.Close()
 }
 
+// HTTPObserver POSTs each event as JSON to a URL.
 type HTTPObserver struct {
 	url    string
 	client *http.Client
 }
 
+// NewHTTPObserver creates an HTTPObserver with a 2 second request timeout.
 func NewHTTPObserver(url string) *HTTPObserver {
 	return &HTTPObserver{url: url, client: &http.Client{Timeout: 2 * time.Second}}
 }
 
+// Notify sends e and returns an error unless the receiver responds 2xx.
 func (o *HTTPObserver) Notify(ctx context.Context, e Event) error {
 	body, err := json.Marshal(e)
 	if err != nil {

@@ -1,3 +1,4 @@
+// Package sign computes and verifies HMAC-SHA256 signatures of message bodies.
 package sign
 
 import (
@@ -6,6 +7,7 @@ import (
 	"encoding/hex"
 )
 
+// Header is the HTTP header that carries the hex-encoded signature.
 const Header = "HashSHA256"
 
 func mac(key string, data []byte) []byte {
@@ -14,10 +16,12 @@ func mac(key string, data []byte) []byte {
 	return h.Sum(nil)
 }
 
+// Sign returns the hex-encoded HMAC-SHA256 of data under key.
 func Sign(key string, data []byte) string {
 	return hex.EncodeToString(mac(key, data))
 }
 
+// Valid reports whether got is the correct signature of data under key.
 func Valid(key string, data []byte, got string) bool {
 	gotBytes, err := hex.DecodeString(got)
 	if err != nil {

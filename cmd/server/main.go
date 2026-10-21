@@ -47,7 +47,7 @@ func main() {
 
 	switch backendFor(cfg) {
 	case backendPostgres:
-		// sql.Open не подключается к БД, соединение проверит Migrate.
+		// sql.Open does not connect to the database, Migrate will check the connection.
 		db, err := sql.Open("pgx", cfg.DatabaseDSN)
 		if err != nil {
 			log.Fatal(err)
@@ -141,7 +141,7 @@ func main() {
 	}
 
 	stop()
-	wg.Wait() // фоновое сохранение должно закончиться до финального
+	wg.Wait() // background saving must finish before the final save
 
 	if fileStorage != nil {
 		if err := fileStorage.Save(); err != nil {
