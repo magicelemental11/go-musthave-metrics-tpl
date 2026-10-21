@@ -31,7 +31,7 @@ func TestLoadServerPriority(t *testing.T) {
 }
 
 func clearServerEnv(t *testing.T) {
-	for _, name := range []string{"ADDRESS", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE", "DATABASE_DSN", "KEY", "AUDIT_FILE", "AUDIT_URL"} {
+	for _, name := range []string{"ADDRESS", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE", "DATABASE_DSN", "KEY", "AUDIT_FILE", "AUDIT_URL", "PPROF_ADDRESS"} {
 		t.Setenv(name, "") // запоминает исходное значение для восстановления
 		os.Unsetenv(name)
 	}
@@ -233,6 +233,31 @@ func TestLoadServerAudit(t *testing.T) {
 		t.Setenv("AUDIT_URL", "http://env/")
 		cfg, err := LoadServer([]string{"--audit-file", "/tmp/a.log", "--audit-url", "http://a/b"})
 		if err != nil || cfg.AuditFile != "/env/a.log" || cfg.AuditURL != "http://env/" {
+			t.Fatalf("got %+v, %v", cfg, err)
+		}
+	})
+}
+
+func TestLoadServerPprof(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		clearServerEnv(t)
+		cfg, err := LoadServer(nil)
+		if err != nil || cfg.PprofAddress != "" {
+			t.Fatalf("got %+v, %v", cfg, err)
+		}
+	})
+	t.Run("flag", func(t *testing.T) {
+		clearServerEnv(t)
+		cfg, err := LoadServer([]string{"--pprof-address", "localhost:6060"})
+		if err != nil || cfg.PprofAddress != "localhost:6060" {
+			t.Fatalf("got %+v, %v", cfg, err)
+		}
+	})
+	t.Run("env over flag", func(t *testing.T) {
+		clearServerEnv(t)
+		t.Setenv("PPROF_ADDRESS", "localhost:7070")
+		cfg, err := LoadServer([]string{"--pprof-address", "localhost:6060"})
+		if err != nil || cfg.PprofAddress != "localhost:7070" {
 			t.Fatalf("got %+v, %v", cfg, err)
 		}
 	})

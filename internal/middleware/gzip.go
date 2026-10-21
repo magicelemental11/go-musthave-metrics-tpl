@@ -7,6 +7,12 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+)
+
+var (
+	writerPool = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
+	readerPool = sync.Pool{New: func() any { return new(gzip.Reader) }}
 )
 
 func shouldCompress(contentType string) bool {
@@ -28,7 +34,8 @@ func (w *compressWriter) WriteHeader(status int) {
 	if shouldCompress(w.Header().Get("Content-Type")) && w.Header().Get("Content-Encoding") == "" {
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Del("Content-Length")
-		w.gz = gzip.NewWriter(w.ResponseWriter)
+		w.gz = writerPool.Get().(*gzip.Writer)
+		w.gz.Reset(w.ResponseWriter)
 	}
 	w.ResponseWriter.WriteHeader(status)
 }
@@ -44,10 +51,13 @@ func (w *compressWriter) Write(b []byte) (int, error) {
 }
 
 func (w *compressWriter) close() error {
-	if w.gz != nil {
-		return w.gz.Close()
+	if w.gz == nil {
+		return nil
 	}
-	return nil
+	err := w.gz.Close()
+	writerPool.Put(w.gz)
+	w.gz = nil
+	return err
 }
 
 // Gzip распаковывает запросы с Content-Encoding: gzip и сжимает ответы
@@ -55,7 +65,9 @@ func (w *compressWriter) close() error {
 func Gzip(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
-			zr, err := gzip.NewReader(r.Body)
+			zr := readerPool.Get().(*gzip.Reader)
+			defer readerPool.Put(zr)
+			err := zr.Reset(r.Body)
 			switch {
 			case err == nil:
 				defer zr.Close()

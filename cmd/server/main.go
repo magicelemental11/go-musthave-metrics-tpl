@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"sync"
@@ -108,6 +109,10 @@ func main() {
 
 	r.Get("/", h.GetAllMetrics)
 
+	if cfg.PprofAddress != "" {
+		defer startPprof(cfg.PprofAddress)()
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           r,
@@ -159,6 +164,27 @@ func backendFor(cfg config.ServerConfig) string {
 	default:
 		return backendMemory
 	}
+}
+
+func startPprof(addr string) (stop func()) {
+	srv := &http.Server{Addr: addr, Handler: pprofMux(), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("pprof server: %v", err)
+		}
+	}()
+	log.Println("pprof address:", addr)
+	return func() { srv.Close() }
+}
+
+func pprofMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
 }
 
 func buildAudit(cfg config.ServerConfig) (*audit.Subject, error) {

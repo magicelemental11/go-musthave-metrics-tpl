@@ -26,7 +26,10 @@ import (
 
 const requestTimeout = 10 * time.Second
 
-var httpClient = &http.Client{Timeout: requestTimeout}
+var (
+	httpClient = &http.Client{Timeout: requestTimeout}
+	gzipPool   = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
+)
 
 type Agent struct {
 	mu        sync.Mutex
@@ -191,7 +194,9 @@ func sendBatch(ctx context.Context, url, key string, batch []model.Metrics) (int
 		return 0, fmt.Errorf("marshal: %w", err)
 	}
 	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
+	zw := gzipPool.Get().(*gzip.Writer)
+	defer gzipPool.Put(zw)
+	zw.Reset(&buf)
 	if _, err := zw.Write(body); err != nil {
 		return 0, fmt.Errorf("gzip: %w", err)
 	}

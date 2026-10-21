@@ -11,6 +11,12 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
 )
 
+var indexTmpl = template.Must(template.New("metrics").Parse(`
+	<html><body><ul>
+		{{range $name, $value := .Gauges}}<li>{{$name}}: {{$value}}</li>{{end}}
+		{{range $name, $value := .Counters}}<li>{{$name}}: {{$value}}</li>{{end}}
+	</ul></body></html>`))
+
 type Handler struct {
 	storage repository.Storage
 	pinger  Pinger
@@ -60,13 +66,7 @@ func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
-	tmpl := template.Must(template.New("metrics").Parse(`
-	<html><body><ul>
-		{{range $name, $value := .Gauges}}<li>{{$name}}: {{$value}}</li>{{end}}
-		{{range $name, $value := .Counters}}<li>{{$name}}: {{$value}}</li>{{end}}
-	</ul></body></html>`))
-
-	tmpl.Execute(w, struct {
+	indexTmpl.Execute(w, struct {
 		Gauges   map[string]float64
 		Counters map[string]int64
 	}{gauges, counters})

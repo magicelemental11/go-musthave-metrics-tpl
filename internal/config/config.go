@@ -23,6 +23,7 @@ type ServerConfig struct {
 	Key             string // пустая строка — подпись отключена
 	AuditFile       string
 	AuditURL        string
+	PprofAddress    string
 }
 
 type AgentConfig struct {
@@ -44,6 +45,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 	key := fs.String("k", "", "signing key (empty - disabled)")
 	auditFile := fs.String("audit-file", "", "audit log file path (empty - disabled)")
 	auditURL := fs.String("audit-url", "", "audit receiver URL (empty - disabled)")
+	pprofAddress := fs.String("pprof-address", "", "pprof listen address (empty - disabled)")
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
@@ -73,6 +75,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 		Key:             envString("KEY", *key),
 		AuditFile:       envString("AUDIT_FILE", *auditFile),
 		AuditURL:        envString("AUDIT_URL", *auditURL),
+		PprofAddress:    envString("PPROF_ADDRESS", *pprofAddress),
 	}, nil
 }
 
