@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/audit"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
@@ -77,6 +78,14 @@ func main() {
 	}
 
 	h := handler.NewHandler(storage, pinger)
+	subject, err := buildAudit(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if subject != nil {
+		defer subject.Close()
+		h.WithAudit(subject)
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logging(logger))
@@ -150,6 +159,27 @@ func backendFor(cfg config.ServerConfig) string {
 	default:
 		return backendMemory
 	}
+}
+
+func buildAudit(cfg config.ServerConfig) (*audit.Subject, error) {
+	subject := &audit.Subject{}
+	attached := 0
+	if cfg.AuditFile != "" {
+		fo, err := audit.NewFileObserver(cfg.AuditFile)
+		if err != nil {
+			return nil, err
+		}
+		subject.Attach(fo)
+		attached++
+	}
+	if cfg.AuditURL != "" {
+		subject.Attach(audit.NewHTTPObserver(cfg.AuditURL))
+		attached++
+	}
+	if attached == 0 {
+		return nil, nil
+	}
+	return subject, nil
 }
 
 func savePeriodically(ctx context.Context, s *repository.FileStorage, interval time.Duration) {

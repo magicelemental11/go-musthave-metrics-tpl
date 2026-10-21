@@ -31,5 +31,10 @@ func (h *Handler) UpdateMetricsBatch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "storage error")
 		return
 	}
+	names := make([]string, len(metrics))
+	for i, m := range metrics {
+		names[i] = m.ID
+	}
+	h.publishAudit(r, names...)
 	w.WriteHeader(http.StatusOK)
 }

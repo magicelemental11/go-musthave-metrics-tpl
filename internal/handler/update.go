@@ -14,6 +14,7 @@ import (
 type Handler struct {
 	storage repository.Storage
 	pinger  Pinger
+	audit   Publisher
 }
 
 // NewHandler: pinger может быть nil — тогда /ping отвечает 500.
@@ -110,5 +111,6 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("received %s %s = %s\n", metricType, metricName, metricValue)
+	h.publishAudit(r, metricName)
 	w.WriteHeader(http.StatusOK)
 }
