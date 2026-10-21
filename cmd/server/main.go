@@ -85,7 +85,11 @@ func main() {
 		log.Fatal(err)
 	}
 	if subject != nil {
-		defer subject.Close()
+		defer func() {
+			if err := subject.Close(); err != nil {
+				log.Printf("close audit: %v", err)
+			}
+		}()
 		h.WithAudit(subject)
 	}
 
@@ -175,7 +179,11 @@ func startPprof(addr string) (stop func()) {
 		}
 	}()
 	log.Println("pprof address:", addr)
-	return func() { srv.Close() }
+	return func() {
+		if err := srv.Close(); err != nil {
+			log.Printf("close pprof server: %v", err)
+		}
+	}
 }
 
 func pprofMux() *http.ServeMux {

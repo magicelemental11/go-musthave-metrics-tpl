@@ -38,6 +38,7 @@ func (s *Subject) Attach(o Observer) {
 }
 
 // Publish notifies every observer in order. Observer errors are logged and do not stop delivery.
+// Delivery is synchronous: a slow observer delays the caller by up to its own timeout.
 // Publish on a nil Subject does nothing.
 func (s *Subject) Publish(ctx context.Context, e Event) {
 	if s == nil {

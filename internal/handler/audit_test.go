@@ -76,6 +76,14 @@ func TestAuditIPFromXRealIP(t *testing.T) {
 	}
 }
 
+func TestAuditIPFromRemoteAddr(t *testing.T) {
+	pub := &fakePublisher{}
+	postFrom(newAuditRouter(repository.NewMemStorage(), pub), "/update/gauge/a/1", "", "10.0.0.1:1234", nil)
+	if len(pub.events) != 1 || pub.events[0].IPAddress != "10.0.0.1" {
+		t.Fatalf("events=%+v", pub.events)
+	}
+}
+
 func TestAuditNotPublishedOnFailure(t *testing.T) {
 	tests := []struct {
 		name, path, body string
