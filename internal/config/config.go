@@ -21,6 +21,8 @@ type ServerConfig struct {
 	Restore         bool
 	DatabaseDSN     string // пустая строка — БД не используется
 	Key             string // пустая строка — подпись отключена
+	AuditFile       string
+	AuditURL        string
 }
 
 type AgentConfig struct {
@@ -40,6 +42,8 @@ func LoadServer(args []string) (ServerConfig, error) {
 	restore := fs.Bool("r", true, "restore metrics from file on start")
 	dsn := fs.String("d", "", "database DSN (empty - disabled)")
 	key := fs.String("k", "", "signing key (empty - disabled)")
+	auditFile := fs.String("audit-file", "", "audit log file path (empty - disabled)")
+	auditURL := fs.String("audit-url", "", "audit receiver URL (empty - disabled)")
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
@@ -67,6 +71,8 @@ func LoadServer(args []string) (ServerConfig, error) {
 		Restore:         restoreValue,
 		DatabaseDSN:     envString("DATABASE_DSN", *dsn),
 		Key:             envString("KEY", *key),
+		AuditFile:       envString("AUDIT_FILE", *auditFile),
+		AuditURL:        envString("AUDIT_URL", *auditURL),
 	}, nil
 }
 

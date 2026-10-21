@@ -31,7 +31,7 @@ func TestLoadServerPriority(t *testing.T) {
 }
 
 func clearServerEnv(t *testing.T) {
-	for _, name := range []string{"ADDRESS", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE", "DATABASE_DSN", "KEY"} {
+	for _, name := range []string{"ADDRESS", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE", "DATABASE_DSN", "KEY", "AUDIT_FILE", "AUDIT_URL"} {
 		t.Setenv(name, "") // запоминает исходное значение для восстановления
 		os.Unsetenv(name)
 	}
@@ -208,6 +208,32 @@ func TestLoadAgentRateLimit(t *testing.T) {
 		t.Setenv("RATE_LIMIT", "abc")
 		if _, err := LoadAgent(nil); err == nil {
 			t.Fatal("expected error for abc")
+		}
+	})
+}
+
+func TestLoadServerAudit(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		clearServerEnv(t)
+		cfg, err := LoadServer(nil)
+		if err != nil || cfg.AuditFile != "" || cfg.AuditURL != "" {
+			t.Fatalf("got %+v, %v", cfg, err)
+		}
+	})
+	t.Run("flags", func(t *testing.T) {
+		clearServerEnv(t)
+		cfg, err := LoadServer([]string{"--audit-file", "/tmp/a.log", "--audit-url", "http://a/b"})
+		if err != nil || cfg.AuditFile != "/tmp/a.log" || cfg.AuditURL != "http://a/b" {
+			t.Fatalf("got %+v, %v", cfg, err)
+		}
+	})
+	t.Run("env over flags", func(t *testing.T) {
+		clearServerEnv(t)
+		t.Setenv("AUDIT_FILE", "/env/a.log")
+		t.Setenv("AUDIT_URL", "http://env/")
+		cfg, err := LoadServer([]string{"--audit-file", "/tmp/a.log", "--audit-url", "http://a/b"})
+		if err != nil || cfg.AuditFile != "/env/a.log" || cfg.AuditURL != "http://env/" {
+			t.Fatalf("got %+v, %v", cfg, err)
 		}
 	})
 }
