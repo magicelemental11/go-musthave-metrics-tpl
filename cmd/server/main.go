@@ -15,12 +15,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"go.uber.org/zap"
+
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/audit"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
-	"go.uber.org/zap"
 )
 
 func main() {
