@@ -17,11 +17,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
+
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/sign"
-	"github.com/shirou/gopsutil/v4/cpu"
-	"github.com/shirou/gopsutil/v4/mem"
 )
 
 const requestTimeout = 10 * time.Second
