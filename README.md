@@ -61,6 +61,77 @@ go test ./internal/handler/...
 go test -v ./...
 ```
 
+## Профилирование
+
+### Бенчмарки
+
+```bash
+go test -run xxx -bench . -benchmem ./internal/...
+```
+
+### Профиль памяти
+
+Нужен `ab` (ApacheBench) и `go tool pprof`. pprof на сервере выключен по умолчанию и включается флагом `--pprof-address` или переменной `PPROF_ADDRESS`. Адрес надо привязывать к `127.0.0.1`: сервер pprof без авторизации, наружу его открывать нельзя.
+
+```bash
+./scripts/gen-load-data.sh load   # load/batch.json, load/batch.json.gz, load/value.json
+
+go run ./cmd/server -a 127.0.0.1:8085 -f "" -r=false --pprof-address 127.0.0.1:6065
+
+ab -k -n 30000 -c 50 -p load/batch.json.gz -T application/json -H "Content-Encoding: gzip" http://127.0.0.1:8085/updates/
+ab -k -n 30000 -c 50 -p load/value.json -T application/json -H "Accept-Encoding: gzip" http://127.0.0.1:8085/value
+ab -k -n 10000 -c 20 -H "Accept-Encoding: gzip" http://127.0.0.1:8085/
+
+curl -o profiles/base.pprof http://127.0.0.1:6065/debug/pprof/allocs
+```
+
+В `base.pprof` (`go tool pprof -sample_index=alloc_space -peek 'compress/flate.NewWriter$' profiles/base.pprof`) 92,6% выделенной памяти приходится на `compress/flate.NewWriter` (30784 МБ из 33233 МБ): gzip-писатель создавался заново на каждый ответ, `gzip.Reader` — на каждый запрос. Ещё HTML-шаблон главной страницы разбирался при каждом обращении.
+
+Что изменено:
+
+- `internal/middleware/gzip.go`: `gzip.Writer` и `gzip.Reader` берутся из `sync.Pool`.
+- `internal/agent/agent.go`: `gzip.Writer` при отправке батча тоже из `sync.Pool`.
+- `internal/handler/update.go`: шаблон главной страницы разбирается один раз.
+
+После изменений нагрузка повторена теми же командами, профиль сохранён в `profiles/result.pprof`:
+
+```bash
+go tool pprof -top -nodecount=10 -diff_base=profiles/base.pprof profiles/result.pprof
+```
+
+(Ключ `-nodecount=10` ограничивает вывод десятью строками; без него таблица длиннее, итоги отличаются на 1 МБ из-за отсечения узлов.)
+
+```
+File: server
+Type: alloc_space
+Showing nodes accounting for -31959.15MB, 96.17% of 33233.01MB total
+Dropped 218 nodes (cum <= 166.17MB)
+Showing top 10 nodes out of 35
+      flat  flat%   sum%        cum   cum%
+-25259.19MB 76.01% 76.01% -30674.84MB 92.30%  compress/flate.NewWriter (inline)
+-5278.55MB 15.88% 91.89% -5278.55MB 15.88%  compress/flate.(*compressor).initDeflate (inline)
+ -914.49MB  2.75% 94.64%  -914.49MB  2.75%  compress/flate.(*dictDecoder).init (inline)
+ -275.10MB  0.83% 95.47%  -275.10MB  0.83%  compress/flate.(*huffmanEncoder).generate
+ -207.80MB  0.63% 96.09% -1122.29MB  3.38%  compress/flate.NewReader
+  -22.52MB 0.068% 96.16% -1293.57MB  3.89%  compress/gzip.NewReader (inline)
+   -3.50MB 0.011% 96.17% -32331.88MB 97.29%  main.main.Logging.func5.1
+       1MB 0.003% 96.17% -23012.53MB 69.25%  github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler.(*Handler).GetMetricJSON
+    0.50MB 0.0015% 96.17% -7689.32MB 23.14%  text/template.(*Template).execute
+    0.50MB 0.0015% 96.17% -32323.37MB 97.26%  github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware.Gzip.func1
+```
+
+### Бенчмарки до и после
+
+| Бенчмарк | B/op до | B/op после | allocs/op до | allocs/op после |
+|---|---|---|---|---|
+| `ValueJSONGzipResponse` | 804 KiB | 8,5 KiB | 58 | 40 |
+| `IndexPage` | 831 KiB | 18,5 KiB | 637 | 427 |
+| `UpdatesBatchGzipSigned` | 61 KiB | 21 KiB | 165 | 160 |
+| `UpdatesBatchGzip` | 59 KiB | 19 KiB | 139 | 134 |
+| `ReportMetrics` (агент) | 1,72 MB | 32 KB | 323 | 248 |
+
+Бенчмарки `UpdateMetricURL`, `UpdatesBatchPlain`, `MemStorage*`, `Sign`, `Valid` и `CollectMetrics` не затронуты изменениями: аллокации у них те же. `Sign`/`Valid` — около 1 мкс и 8–9 аллокаций, `MemStorageUpdateGauge`/`GetGauge`/`UpdateBatch` — без аллокаций.
+
 ## Структура проекта
 
 Приведённая в этом репозитории структура проекта является рекомендуемой, но не обязательной.
