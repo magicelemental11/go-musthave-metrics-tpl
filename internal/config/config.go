@@ -19,12 +19,19 @@ type ServerConfig struct {
 	StoreInterval   time.Duration // 0 — синхронная запись
 	FileStoragePath string        // пустая строка отключает сохранение
 	Restore         bool
+	DatabaseDSN     string // пустая строка — БД не используется
+	Key             string // пустая строка — подпись отключена
+	AuditFile       string
+	AuditURL        string
+	PprofAddress    string
 }
 
 type AgentConfig struct {
 	Address        string
 	PollInterval   time.Duration
 	ReportInterval time.Duration
+	Key            string
+	RateLimit      int
 }
 
 // LoadServer: приоритет — переменная окружения, флаг, значение по умолчанию.
@@ -34,6 +41,11 @@ func LoadServer(args []string) (ServerConfig, error) {
 	storeInterval := fs.Int("i", defaultStoreInterval, "store interval in seconds (0 - synchronous)")
 	filePath := fs.String("f", defaultFileStoragePath, "file storage path (empty - disabled)")
 	restore := fs.Bool("r", true, "restore metrics from file on start")
+	dsn := fs.String("d", "", "database DSN (empty - disabled)")
+	key := fs.String("k", "", "signing key (empty - disabled)")
+	auditFile := fs.String("audit-file", "", "audit log file path (empty - disabled)")
+	auditURL := fs.String("audit-url", "", "audit receiver URL (empty - disabled)")
+	pprofAddress := fs.String("pprof-address", "", "pprof listen address (empty - disabled)")
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
@@ -59,6 +71,11 @@ func LoadServer(args []string) (ServerConfig, error) {
 		StoreInterval:   interval,
 		FileStoragePath: filePathValue,
 		Restore:         restoreValue,
+		DatabaseDSN:     envString("DATABASE_DSN", *dsn),
+		Key:             envString("KEY", *key),
+		AuditFile:       envString("AUDIT_FILE", *auditFile),
+		AuditURL:        envString("AUDIT_URL", *auditURL),
+		PprofAddress:    envString("PPROF_ADDRESS", *pprofAddress),
 	}, nil
 }
 
@@ -68,6 +85,8 @@ func LoadAgent(args []string) (AgentConfig, error) {
 	address := fs.String("a", defaultAddress, "server address")
 	poll := fs.Int("p", 2, "poll interval in seconds")
 	report := fs.Int("r", 10, "report interval in seconds")
+	key := fs.String("k", "", "signing key (empty - disabled)")
+	limit := fs.Int("l", 1, "max concurrent requests to the server")
 	if err := fs.Parse(args); err != nil {
 		return AgentConfig{}, err
 	}
@@ -81,10 +100,23 @@ func LoadAgent(args []string) (AgentConfig, error) {
 		return AgentConfig{}, err
 	}
 
+	rateLimit := *limit
+	if v := os.Getenv("RATE_LIMIT"); v != "" {
+		rateLimit, err = strconv.Atoi(v)
+		if err != nil {
+			return AgentConfig{}, fmt.Errorf("RATE_LIMIT must be an integer, got %q", v)
+		}
+	}
+	if rateLimit < 1 {
+		return AgentConfig{}, fmt.Errorf("RATE_LIMIT (or -l) must be at least 1, got %d", rateLimit)
+	}
+
 	return AgentConfig{
 		Address:        envString("ADDRESS", *address),
 		PollInterval:   pollInterval,
 		ReportInterval: reportInterval,
+		Key:            envString("KEY", *key),
+		RateLimit:      rateLimit,
 	}, nil
 }
 

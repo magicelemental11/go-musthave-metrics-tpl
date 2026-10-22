@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,15 +27,29 @@ func NewFileStorage(mem *MemStorage, path string, syncSave bool) *FileStorage {
 	return &FileStorage{MemStorage: mem, path: path, syncSave: syncSave}
 }
 
-func (f *FileStorage) UpdateGauge(name string, value float64) {
-	f.MemStorage.UpdateGauge(name, value)
+func (f *FileStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
+	if err := f.MemStorage.UpdateGauge(ctx, name, value); err != nil {
+		return err
+	}
 	f.saveIfSync()
+	return nil
 }
 
-func (f *FileStorage) UpdateCounter(name string, value int64) int64 {
-	total := f.MemStorage.UpdateCounter(name, value)
+func (f *FileStorage) UpdateCounter(ctx context.Context, name string, value int64) (int64, error) {
+	total, err := f.MemStorage.UpdateCounter(ctx, name, value)
+	if err != nil {
+		return 0, err
+	}
 	f.saveIfSync()
-	return total
+	return total, nil
+}
+
+func (f *FileStorage) UpdateBatch(ctx context.Context, metrics []model.Metrics) error {
+	if err := f.MemStorage.UpdateBatch(ctx, metrics); err != nil {
+		return err
+	}
+	f.saveIfSync()
+	return nil
 }
 
 func (f *FileStorage) saveIfSync() {
