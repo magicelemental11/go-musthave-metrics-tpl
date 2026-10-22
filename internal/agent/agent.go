@@ -1,37 +1,61 @@
+// Package agent collects runtime and system metrics and reports them to the server.
 package agent
 
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
+
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/sign"
 )
 
 const requestTimeout = 10 * time.Second
 
-var httpClient = &http.Client{Timeout: requestTimeout}
+var (
+	httpClient = &http.Client{Timeout: requestTimeout}
+	gzipPool   = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
+)
 
+// Agent collects metrics and sends them to the server. It is safe for concurrent use.
 type Agent struct {
 	mu        sync.Mutex
 	pollCount int64
 	stats     runtime.MemStats
 	gauges    map[string]float64
+	delays    []time.Duration
+	key       string
+	rateLimit int
 }
 
-func NewAgent() *Agent {
+// NewAgent creates an Agent. key signs requests (empty disables signing);
+// rateLimit bounds the number of concurrent requests to the server.
+func NewAgent(key string, rateLimit int) *Agent {
 	return &Agent{
-		gauges: make(map[string]float64),
+		key:       key,
+		rateLimit: rateLimit,
+		gauges:    make(map[string]float64),
+		delays:    retry.DefaultDelays,
 	}
 }
 
+// CollectMetrics reads runtime.MemStats and increments PollCount.
 func (a *Agent) CollectMetrics() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -77,41 +101,110 @@ func (a *Agent) snapshot() (map[string]float64, int64) {
 	return gauges, a.pollCount
 }
 
-// Во время отправки мьютекс не держим, чтобы сбор метрик не блокировался медленным сервером.
-func (a *Agent) ReportMetrics(serverAddr string) {
-	gauges, pollCount := a.snapshot()
-	url := serverAddr + "/update"
-
-	for name, value := range gauges {
-		status, err := sendMetric(url, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
-		if err != nil {
-			log.Printf("error sending %s: %v", name, err)
-			continue
-		}
-		log.Printf("sent gauge %s = %v → %d", name, value, status)
-	}
-
-	status, err := sendMetric(url, model.Metrics{ID: "PollCount", MType: model.Counter, Delta: &pollCount})
+// CollectSystemMetrics reads total and free memory and per-CPU utilization via gopsutil.
+func (a *Agent) CollectSystemMetrics() error {
+	vm, err := mem.VirtualMemory()
 	if err != nil {
-		log.Printf("error sending PollCount: %v", err)
-		return
+		return fmt.Errorf("virtual memory: %w", err)
 	}
-	log.Printf("sent counter PollCount = %d → %d", pollCount, status)
-	if status == http.StatusOK {
-		// Вычитаем только отправленное: опросы, сделанные во время отправки, не теряем.
-		a.mu.Lock()
-		a.pollCount -= pollCount
-		a.mu.Unlock()
+	cpus, err := cpu.Percent(0, true)
+	if err != nil {
+		return fmt.Errorf("cpu percent: %w", err)
 	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.gauges["TotalMemory"] = float64(vm.Total)
+	a.gauges["FreeMemory"] = float64(vm.Free)
+	for i, percent := range cpus {
+		a.gauges[fmt.Sprintf("CPUutilization%d", i+1)] = percent
+	}
+	return nil
 }
 
-func sendMetric(url string, m model.Metrics) (int, error) {
-	body, err := json.Marshal(m)
+// ReportMetrics sends the collected metrics to serverAddr in batches through a bounded worker pool.
+// The mutex is not held while sending, so collection is not blocked by a slow server.
+func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
+	gauges, pollCount := a.snapshot()
+
+	batch := make([]model.Metrics, 0, len(gauges)+1)
+	if pollCount > 0 {
+		batch = append(batch, model.Metrics{ID: "PollCount", MType: model.Counter, Delta: &pollCount})
+	}
+	for name, value := range gauges {
+		batch = append(batch, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
+	}
+	if len(batch) == 0 {
+		return
+	}
+
+	chunks := splitBatch(batch, a.rateLimit)
+	runPool(a.rateLimit, len(chunks), func(i int) {
+		var status int
+		err := retry.Do(ctx, a.delays, func() (err error) {
+			status, err = sendBatch(ctx, serverAddr+"/updates/", a.key, chunks[i])
+			return err
+		}, isTransientNetErr)
+		if err != nil {
+			log.Printf("error sending batch of %d metrics: %v", len(chunks[i]), err)
+			return
+		}
+		log.Printf("sent batch of %d metrics → %d", len(chunks[i]), status)
+		if i == 0 && status == http.StatusOK && pollCount > 0 {
+			// Subtract only what was sent: polls made during sending are not lost.
+			a.mu.Lock()
+			a.pollCount -= pollCount
+			a.mu.Unlock()
+		}
+	})
+}
+
+func splitBatch(batch []model.Metrics, parts int) [][]model.Metrics {
+	size := (len(batch) + parts - 1) / parts
+	chunks := make([][]model.Metrics, 0, parts)
+	for start := 0; start < len(batch); start += size {
+		chunks = append(chunks, batch[start:min(start+size, len(batch))])
+	}
+	return chunks
+}
+
+func runPool(limit, n int, job func(i int)) {
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range min(limit, n) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				job(i)
+			}
+		}()
+	}
+	for i := range n {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+}
+
+func isTransientNetErr(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func sendBatch(ctx context.Context, url, key string, batch []model.Metrics) (int, error) {
+	body, err := json.Marshal(batch)
 	if err != nil {
 		return 0, fmt.Errorf("marshal: %w", err)
 	}
 	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
+	zw := gzipPool.Get().(*gzip.Writer)
+	defer gzipPool.Put(zw)
+	zw.Reset(&buf)
 	if _, err := zw.Write(body); err != nil {
 		return 0, fmt.Errorf("gzip: %w", err)
 	}
@@ -119,12 +212,15 @@ func sendMetric(url string, m model.Metrics) (int, error) {
 		return 0, fmt.Errorf("gzip: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
 	if err != nil {
 		return 0, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+	if key != "" {
+		req.Header.Set(sign.Header, sign.Sign(key, buf.Bytes()))
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("post: %w", err)

@@ -31,6 +31,9 @@ func decodeMetrics(w http.ResponseWriter, r *http.Request) (model.Metrics, bool)
 	return m, true
 }
 
+// UpdateMetricJSON stores a single model.Metrics from the JSON body and echoes it back.
+// For counters the echoed Delta is the accumulated total.
+// It responds 400 for malformed JSON, an unknown type or a missing value, and 404 for an empty id.
 func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 	m, ok := decodeMetrics(w, r)
 	if !ok {
@@ -47,22 +50,32 @@ func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "gauge value is required")
 			return
 		}
-		h.storage.UpdateGauge(m.ID, *m.Value)
+		if err := h.storage.UpdateGauge(r.Context(), m.ID, *m.Value); err != nil {
+			storageError(w, writeJSONError, "update gauge", err, "")
+			return
+		}
 	case model.Counter:
 		if m.Delta == nil {
 			writeJSONError(w, http.StatusBadRequest, "counter delta is required")
 			return
 		}
-		total := h.storage.UpdateCounter(m.ID, *m.Delta)
+		total, err := h.storage.UpdateCounter(r.Context(), m.ID, *m.Delta)
+		if err != nil {
+			storageError(w, writeJSONError, "update counter", err, "")
+			return
+		}
 		m.Delta = &total
 	default:
 		writeJSONError(w, http.StatusBadRequest, "unknown metric type")
 		return
 	}
 
+	h.publishAudit(r, m.ID)
 	writeJSON(w, http.StatusOK, m)
 }
 
+// GetMetricJSON fills in the value of the model.Metrics identified by the JSON body.
+// It responds 404 if the metric does not exist and 400 for malformed JSON or an unknown type.
 func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	m, ok := decodeMetrics(w, r)
 	if !ok {
@@ -71,16 +84,16 @@ func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 
 	switch m.MType {
 	case model.Gauge:
-		value, ok := h.storage.GetGauge(m.ID)
-		if !ok {
-			writeJSONError(w, http.StatusNotFound, "gauge not found")
+		value, err := h.storage.GetGauge(r.Context(), m.ID)
+		if err != nil {
+			storageError(w, writeJSONError, "get gauge", err, "gauge not found")
 			return
 		}
 		m.Value = &value
 	case model.Counter:
-		delta, ok := h.storage.GetCounter(m.ID)
-		if !ok {
-			writeJSONError(w, http.StatusNotFound, "counter not found")
+		delta, err := h.storage.GetCounter(r.Context(), m.ID)
+		if err != nil {
+			storageError(w, writeJSONError, "get counter", err, "counter not found")
 			return
 		}
 		m.Delta = &delta

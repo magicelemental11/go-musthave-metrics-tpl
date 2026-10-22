@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"sync"
@@ -12,11 +14,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"go.uber.org/zap"
+
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/audit"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
-	"go.uber.org/zap"
 )
 
 func main() {
@@ -36,11 +41,25 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	mem := repository.NewMemStorage()
-	var storage repository.Storage = mem
+	var pinger handler.Pinger
+	var storage repository.Storage
 	var fileStorage *repository.FileStorage
 
-	if cfg.FileStoragePath != "" {
+	switch backendFor(cfg) {
+	case backendPostgres:
+		// sql.Open does not connect to the database, Migrate will check the connection.
+		db, err := sql.Open("pgx", cfg.DatabaseDSN)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer db.Close()
+		if err := repository.Migrate(db); err != nil {
+			log.Fatalf("migrations failed: %v", err)
+		}
+		pinger = db
+		storage = repository.NewPgStorage(db)
+	case backendFile:
+		mem := repository.NewMemStorage()
 		fileStorage = repository.NewFileStorage(mem, cfg.FileStoragePath, cfg.StoreInterval == 0)
 		storage = fileStorage
 
@@ -56,12 +75,27 @@ func main() {
 				savePeriodically(ctx, fileStorage, cfg.StoreInterval)
 			}()
 		}
+	default:
+		storage = repository.NewMemStorage()
 	}
 
-	h := handler.NewHandler(storage)
+	h := handler.NewHandler(storage, pinger)
+	subject, err := buildAudit(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if subject != nil {
+		defer func() {
+			if err := subject.Close(); err != nil {
+				log.Printf("close audit: %v", err)
+			}
+		}()
+		h.WithAudit(subject)
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logging(logger))
+	r.Use(middleware.Sign(cfg.Key))
 	r.Use(middleware.Gzip)
 
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetric)
@@ -71,11 +105,18 @@ func main() {
 	r.Post("/update/", http.NotFound)
 
 	r.Post("/update", h.UpdateMetricJSON)
+	r.Post("/updates/", h.UpdateMetricsBatch)
 	r.Post("/value", h.GetMetricJSON)
 
 	r.Get("/value/{type}/{name}", h.GetMetric)
 
+	r.Get("/ping", h.Ping)
+
 	r.Get("/", h.GetAllMetrics)
+
+	if cfg.PprofAddress != "" {
+		defer startPprof(cfg.PprofAddress)()
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.Address,
@@ -104,13 +145,76 @@ func main() {
 	}
 
 	stop()
-	wg.Wait() // фоновое сохранение должно закончиться до финального
+	wg.Wait() // background saving must finish before the final save
 
 	if fileStorage != nil {
 		if err := fileStorage.Save(); err != nil {
 			log.Printf("final save failed: %v", err)
 		}
 	}
+}
+
+const (
+	backendPostgres = "postgres"
+	backendFile     = "file"
+	backendMemory   = "memory"
+)
+
+func backendFor(cfg config.ServerConfig) string {
+	switch {
+	case cfg.DatabaseDSN != "":
+		return backendPostgres
+	case cfg.FileStoragePath != "":
+		return backendFile
+	default:
+		return backendMemory
+	}
+}
+
+func startPprof(addr string) (stop func()) {
+	srv := &http.Server{Addr: addr, Handler: pprofMux(), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("pprof server: %v", err)
+		}
+	}()
+	log.Println("pprof address:", addr)
+	return func() {
+		if err := srv.Close(); err != nil {
+			log.Printf("close pprof server: %v", err)
+		}
+	}
+}
+
+func pprofMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
+}
+
+func buildAudit(cfg config.ServerConfig) (*audit.Subject, error) {
+	subject := &audit.Subject{}
+	attached := 0
+	if cfg.AuditFile != "" {
+		fo, err := audit.NewFileObserver(cfg.AuditFile)
+		if err != nil {
+			return nil, err
+		}
+		subject.Attach(fo)
+		attached++
+	}
+	if cfg.AuditURL != "" {
+		subject.Attach(audit.NewHTTPObserver(cfg.AuditURL))
+		attached++
+	}
+	if attached == 0 {
+		return nil, nil
+	}
+	return subject, nil
 }
 
 func savePeriodically(ctx context.Context, s *repository.FileStorage, interval time.Duration) {
