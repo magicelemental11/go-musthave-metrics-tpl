@@ -13,7 +13,7 @@ import (
 )
 
 func newJSONRouter() http.Handler {
-	h := NewHandler(repository.NewMemStorage())
+	h := NewHandler(repository.NewMemStorage(), nil)
 	r := chi.NewRouter()
 	r.Post("/update", h.UpdateMetricJSON)
 	r.Post("/value", h.GetMetricJSON)
