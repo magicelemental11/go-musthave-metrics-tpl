@@ -45,7 +45,12 @@ go run cmd/agent/main.go
 
 # Флаги агента (опционально)
 go run cmd/agent/main.go -a localhost:8080 -p 2 -r 10
+
+# Сборка server и agent в bin/ с версией, датой и коммитом
+VERSION=v1.0.0 ./scripts/build.sh
 ```
+
+При старте сервер и агент печатают `Build version`, `Build date` и `Build commit`; без `scripts/build.sh` (например, через `go run`) во всех трёх строках будет `N/A`.
 
 ## Тесты
 
