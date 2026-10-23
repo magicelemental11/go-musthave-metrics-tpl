@@ -3,6 +3,8 @@ package model
 
 import "errors"
 
+//go:generate go run ../../cmd/reset
+
 // Metric types.
 const (
 	Counter = "counter"
@@ -12,6 +14,8 @@ const (
 // Metrics is the JSON representation of a metric.
 // Delta is set for counters and Value for gauges; both are pointers
 // so that zero can be told apart from an absent value.
+//
+// generate:reset
 type Metrics struct {
 	ID    string   `json:"id"`
 	MType string   `json:"type"`
