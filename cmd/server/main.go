@@ -18,13 +18,22 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/audit"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/buildinfo"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
 )
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
 func main() {
+	buildinfo.Fprint(os.Stdout, buildVersion, buildDate, buildCommit)
+
 	cfg, err := config.LoadServer(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
