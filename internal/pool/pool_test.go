@@ -30,6 +30,17 @@ func TestPutResetsObject(t *testing.T) {
 	}
 }
 
+func TestPutIgnoresNil(t *testing.T) {
+	p := New(newBuf)
+
+	var b *buf
+	p.Put(b)
+
+	if got := p.Get(); got == nil {
+		t.Error("Get returned nil after Put(nil)")
+	}
+}
+
 func TestGetReturnsCleanObject(t *testing.T) {
 	p := New(newBuf)
 	b := p.Get()

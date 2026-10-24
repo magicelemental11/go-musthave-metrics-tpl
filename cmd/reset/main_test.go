@@ -24,7 +24,7 @@ func TestGenerateGolden(t *testing.T) {
 	}
 	golden := filepath.Join(dir, "reset.golden")
 	if *update {
-		if err := os.WriteFile(golden, got, 0o644); err != nil {
+		if err = os.WriteFile(golden, got, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

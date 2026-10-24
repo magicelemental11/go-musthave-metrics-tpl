@@ -205,10 +205,10 @@ func sendBatch(ctx context.Context, url, key string, batch []model.Metrics) (int
 	zw := gzipPool.Get().(*gzip.Writer)
 	defer gzipPool.Put(zw)
 	zw.Reset(&buf)
-	if _, err := zw.Write(body); err != nil {
+	if _, err = zw.Write(body); err != nil {
 		return 0, fmt.Errorf("gzip: %w", err)
 	}
-	if err := zw.Close(); err != nil {
+	if err = zw.Close(); err != nil {
 		return 0, fmt.Errorf("gzip: %w", err)
 	}
 

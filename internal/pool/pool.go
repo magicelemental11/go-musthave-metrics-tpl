@@ -1,7 +1,10 @@
 // Package pool provides a typed wrapper around sync.Pool that resets objects on return.
 package pool
 
-import "sync"
+import (
+	"reflect"
+	"sync"
+)
 
 // Resetter is implemented by objects that can be returned to their initial state.
 type Resetter interface {
@@ -24,8 +27,16 @@ func (p *Pool[T]) Get() T {
 }
 
 // Put resets x and makes it available for reuse. x must not be used afterwards.
-// Putting a nil pointer is the caller's mistake: it is stored as is and returned by a later Get.
+// A nil x is ignored.
 func (p *Pool[T]) Put(x T) {
+	if isNil(x) {
+		return
+	}
 	x.Reset()
 	p.inner.Put(x)
+}
+
+func isNil(x any) bool {
+	v := reflect.ValueOf(x)
+	return !v.IsValid() || v.Kind() == reflect.Pointer && v.IsNil()
 }

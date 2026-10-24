@@ -20,6 +20,7 @@ import (
 	"golang.org/x/tools/go/analysis/passes/nilfunc"
 	"golang.org/x/tools/go/analysis/passes/nilness"
 	"golang.org/x/tools/go/analysis/passes/printf"
+	"golang.org/x/tools/go/analysis/passes/shadow"
 	"golang.org/x/tools/go/analysis/passes/shift"
 	"golang.org/x/tools/go/analysis/passes/stdmethods"
 	"golang.org/x/tools/go/analysis/passes/structtag"
@@ -57,6 +58,7 @@ func analyzers() []*analysis.Analyzer {
 		nilfunc.Analyzer,
 		nilness.Analyzer,
 		printf.Analyzer,
+		shadow.Analyzer,
 		shift.Analyzer,
 		stdmethods.Analyzer,
 		structtag.Analyzer,

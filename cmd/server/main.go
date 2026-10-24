@@ -57,12 +57,13 @@ func main() {
 	switch backendFor(cfg) {
 	case backendPostgres:
 		// sql.Open does not connect to the database, Migrate will check the connection.
-		db, err := sql.Open("pgx", cfg.DatabaseDSN)
+		var db *sql.DB
+		db, err = sql.Open("pgx", cfg.DatabaseDSN)
 		if err != nil {
 			log.Fatal(err)
 		}
 		defer db.Close()
-		if err := repository.Migrate(db); err != nil {
+		if err = repository.Migrate(db); err != nil {
 			log.Fatalf("migrations failed: %v", err)
 		}
 		pinger = db
@@ -73,7 +74,7 @@ func main() {
 		storage = fileStorage
 
 		if cfg.Restore {
-			if err := fileStorage.Restore(); err != nil {
+			if err = fileStorage.Restore(); err != nil {
 				log.Printf("restore failed: %v", err)
 			}
 		}

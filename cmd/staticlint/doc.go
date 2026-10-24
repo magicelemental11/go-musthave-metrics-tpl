@@ -33,6 +33,7 @@ for details. The exit code is non-zero when any diagnostic is reported.
   - nilfunc: comparison of a function with nil.
   - nilness: nil dereferences and redundant nil checks found by data flow analysis.
   - printf: mismatch between Printf-style format and arguments.
+  - shadow: variables that shadow an outer declaration.
   - shift: shifts that equal or exceed the operand width.
   - stdmethods: wrong signatures of well-known methods like MarshalJSON.
   - structtag: malformed struct field tags.
