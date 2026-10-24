@@ -75,7 +75,7 @@ func (f *FileStorage) Save() error {
 		return fmt.Errorf("marshal metrics: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 

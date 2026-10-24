@@ -23,7 +23,6 @@ func benchBatch(n int) []model.Metrics {
 
 func BenchmarkMemStorageUpdateGauge(b *testing.B) {
 	s := NewMemStorage()
-	ctx := context.Background()
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -34,7 +33,6 @@ func BenchmarkMemStorageUpdateGauge(b *testing.B) {
 
 func BenchmarkMemStorageGetGauge(b *testing.B) {
 	s := NewMemStorage()
-	ctx := context.Background()
 	s.UpdateGauge(ctx, "Alloc", 1.5)
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
@@ -49,7 +47,6 @@ func BenchmarkMemStorageGetGauge(b *testing.B) {
 func BenchmarkMemStorageUpdateBatch(b *testing.B) {
 	s := NewMemStorage()
 	batch := benchBatch(30)
-	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -64,7 +61,6 @@ func BenchmarkMemStorageGetAllMetrics(b *testing.B) {
 	if err := s.UpdateBatch(context.Background(), benchBatch(30)); err != nil {
 		b.Fatal(err)
 	}
-	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
