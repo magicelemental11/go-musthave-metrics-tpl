@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
 )
 
 const (
@@ -19,17 +21,24 @@ const (
 )
 
 type PgStorage struct {
-	db *sql.DB
+	db     *sql.DB
+	delays []time.Duration
 }
 
 func NewPgStorage(db *sql.DB) *PgStorage {
-	return &PgStorage{db: db}
+	return &PgStorage{db: db, delays: retry.DefaultDelays}
+}
+
+func (p *PgStorage) do(ctx context.Context, fn func() error) error {
+	return retry.Do(ctx, p.delays, fn, isPgConnErr)
 }
 
 func (p *PgStorage) GetGauge(ctx context.Context, name string) (float64, error) {
 	var value float64
-	err := p.db.QueryRowContext(ctx,
-		`SELECT value FROM metrics WHERE id = $1 AND type = $2`, name, model.Gauge).Scan(&value)
+	err := p.do(ctx, func() error {
+		return p.db.QueryRowContext(ctx,
+			`SELECT value FROM metrics WHERE id = $1 AND type = $2`, name, model.Gauge).Scan(&value)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
@@ -41,8 +50,10 @@ func (p *PgStorage) GetGauge(ctx context.Context, name string) (float64, error) 
 
 func (p *PgStorage) GetCounter(ctx context.Context, name string) (int64, error) {
 	var delta int64
-	err := p.db.QueryRowContext(ctx,
-		`SELECT delta FROM metrics WHERE id = $1 AND type = $2`, name, model.Counter).Scan(&delta)
+	err := p.do(ctx, func() error {
+		return p.db.QueryRowContext(ctx,
+			`SELECT delta FROM metrics WHERE id = $1 AND type = $2`, name, model.Counter).Scan(&delta)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
@@ -53,7 +64,10 @@ func (p *PgStorage) GetCounter(ctx context.Context, name string) (int64, error) 
 }
 
 func (p *PgStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
-	_, err := p.db.ExecContext(ctx, upsertGaugeSQL, name, model.Gauge, value)
+	err := p.do(ctx, func() error {
+		_, err := p.db.ExecContext(ctx, upsertGaugeSQL, name, model.Gauge, value)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("update gauge %q: %w", name, err)
 	}
@@ -62,7 +76,9 @@ func (p *PgStorage) UpdateGauge(ctx context.Context, name string, value float64)
 
 func (p *PgStorage) UpdateCounter(ctx context.Context, name string, value int64) (int64, error) {
 	var total int64
-	err := p.db.QueryRowContext(ctx, upsertCounterSQL+` RETURNING delta`, name, model.Counter, value).Scan(&total)
+	err := p.do(ctx, func() error {
+		return p.db.QueryRowContext(ctx, upsertCounterSQL+` RETURNING delta`, name, model.Counter, value).Scan(&total)
+	})
 	if err != nil {
 		return 0, fmt.Errorf("update counter %q: %w", name, err)
 	}
@@ -70,6 +86,19 @@ func (p *PgStorage) UpdateCounter(ctx context.Context, name string, value int64)
 }
 
 func (p *PgStorage) GetAllMetrics(ctx context.Context) (map[string]float64, map[string]int64, error) {
+	var gauges map[string]float64
+	var counters map[string]int64
+	err := p.do(ctx, func() (err error) {
+		gauges, counters, err = p.queryAll(ctx)
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return gauges, counters, nil
+}
+
+func (p *PgStorage) queryAll(ctx context.Context) (map[string]float64, map[string]int64, error) {
 	rows, err := p.db.QueryContext(ctx, `SELECT id, type, delta, value FROM metrics`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get all metrics: %w", err)
@@ -106,6 +135,10 @@ func (p *PgStorage) UpdateBatch(ctx context.Context, metrics []model.Metrics) er
 			return fmt.Errorf("invalid metric %q: %w", m.ID, err)
 		}
 	}
+	return p.do(ctx, func() error { return p.applyBatch(ctx, metrics) })
+}
+
+func (p *PgStorage) applyBatch(ctx context.Context, metrics []model.Metrics) error {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin batch: %w", err)

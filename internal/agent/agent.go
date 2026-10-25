@@ -3,16 +3,22 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
 )
 
 const requestTimeout = 10 * time.Second
@@ -24,11 +30,13 @@ type Agent struct {
 	pollCount int64
 	stats     runtime.MemStats
 	gauges    map[string]float64
+	delays    []time.Duration
 }
 
 func NewAgent() *Agent {
 	return &Agent{
 		gauges: make(map[string]float64),
+		delays: retry.DefaultDelays,
 	}
 }
 
@@ -92,7 +100,11 @@ func (a *Agent) ReportMetrics(serverAddr string) {
 		return
 	}
 
-	status, err := sendBatch(serverAddr+"/updates/", batch)
+	var status int
+	err := retry.Do(context.Background(), a.delays, func() (err error) {
+		status, err = sendBatch(serverAddr+"/updates/", batch)
+		return err
+	}, isTransientNetErr)
 	if err != nil {
 		log.Printf("error sending batch of %d metrics: %v", len(batch), err)
 		return
@@ -104,6 +116,15 @@ func (a *Agent) ReportMetrics(serverAddr string) {
 		a.pollCount -= pollCount
 		a.mu.Unlock()
 	}
+}
+
+func isTransientNetErr(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func sendBatch(url string, batch []model.Metrics) (int, error) {
