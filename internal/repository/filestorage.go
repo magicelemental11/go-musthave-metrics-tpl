@@ -44,6 +44,14 @@ func (f *FileStorage) UpdateCounter(ctx context.Context, name string, value int6
 	return total, nil
 }
 
+func (f *FileStorage) UpdateBatch(ctx context.Context, metrics []model.Metrics) error {
+	if err := f.MemStorage.UpdateBatch(ctx, metrics); err != nil {
+		return err
+	}
+	f.saveIfSync()
+	return nil
+}
+
 func (f *FileStorage) saveIfSync() {
 	if !f.syncSave {
 		return

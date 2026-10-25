@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -138,5 +139,30 @@ func TestGzipWithJSONHandler(t *testing.T) {
 	}
 	if m.Delta == nil || *m.Delta != 4 {
 		t.Errorf("unexpected metric: %+v", m)
+	}
+}
+
+func TestGzipWithBatchHandler(t *testing.T) {
+	storage := repository.NewMemStorage()
+	h := handler.NewHandler(storage, nil)
+	r := chi.NewRouter()
+	r.Use(Gzip)
+	r.Post("/updates/", h.UpdateMetricsBatch)
+
+	body := `[{"id":"g","type":"gauge","value":1.5},{"id":"c","type":"counter","delta":2},{"id":"c","type":"counter","delta":3}]`
+	req := httptest.NewRequest(http.MethodPost, "/updates/", gzipped(t, body))
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Accept-Encoding", "gzip")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rr.Code, rr.Body)
+	}
+	if v, err := storage.GetCounter(context.Background(), "c"); err != nil || v != 5 {
+		t.Errorf("counter = %v, %v", v, err)
+	}
+	if v, err := storage.GetGauge(context.Background(), "g"); err != nil || v != 1.5 {
+		t.Errorf("gauge = %v, %v", v, err)
 	}
 }

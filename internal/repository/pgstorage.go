@@ -9,6 +9,15 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
+const (
+	upsertGaugeSQL = `
+		INSERT INTO metrics (id, type, value) VALUES ($1, $2, $3)
+		ON CONFLICT (id, type) DO UPDATE SET value = EXCLUDED.value`
+	upsertCounterSQL = `
+		INSERT INTO metrics (id, type, delta) VALUES ($1, $2, $3)
+		ON CONFLICT (id, type) DO UPDATE SET delta = metrics.delta + EXCLUDED.delta`
+)
+
 type PgStorage struct {
 	db *sql.DB
 }
@@ -44,10 +53,7 @@ func (p *PgStorage) GetCounter(ctx context.Context, name string) (int64, error) 
 }
 
 func (p *PgStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
-	_, err := p.db.ExecContext(ctx, `
-		INSERT INTO metrics (id, type, value) VALUES ($1, $2, $3)
-		ON CONFLICT (id, type) DO UPDATE SET value = EXCLUDED.value`,
-		name, model.Gauge, value)
+	_, err := p.db.ExecContext(ctx, upsertGaugeSQL, name, model.Gauge, value)
 	if err != nil {
 		return fmt.Errorf("update gauge %q: %w", name, err)
 	}
@@ -56,11 +62,7 @@ func (p *PgStorage) UpdateGauge(ctx context.Context, name string, value float64)
 
 func (p *PgStorage) UpdateCounter(ctx context.Context, name string, value int64) (int64, error) {
 	var total int64
-	err := p.db.QueryRowContext(ctx, `
-		INSERT INTO metrics (id, type, delta) VALUES ($1, $2, $3)
-		ON CONFLICT (id, type) DO UPDATE SET delta = metrics.delta + EXCLUDED.delta
-		RETURNING delta`,
-		name, model.Counter, value).Scan(&total)
+	err := p.db.QueryRowContext(ctx, upsertCounterSQL+` RETURNING delta`, name, model.Counter, value).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("update counter %q: %w", name, err)
 	}
@@ -96,4 +98,33 @@ func (p *PgStorage) GetAllMetrics(ctx context.Context) (map[string]float64, map[
 		return nil, nil, fmt.Errorf("get all metrics: %w", err)
 	}
 	return gauges, counters, nil
+}
+
+func (p *PgStorage) UpdateBatch(ctx context.Context, metrics []model.Metrics) error {
+	for _, m := range metrics {
+		if err := m.Validate(); err != nil {
+			return fmt.Errorf("invalid metric %q: %w", m.ID, err)
+		}
+	}
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin batch: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, m := range metrics {
+		switch m.MType {
+		case model.Gauge:
+			_, err = tx.ExecContext(ctx, upsertGaugeSQL, m.ID, m.MType, *m.Value)
+		case model.Counter:
+			_, err = tx.ExecContext(ctx, upsertCounterSQL, m.ID, m.MType, *m.Delta)
+		}
+		if err != nil {
+			return fmt.Errorf("update %s %q: %w", m.MType, m.ID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit batch: %w", err)
+	}
+	return nil
 }

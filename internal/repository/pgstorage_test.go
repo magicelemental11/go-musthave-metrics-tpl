@@ -3,10 +3,12 @@ package repository
 import (
 	"database/sql"
 	"errors"
+	"math"
 	"os"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
 func newTestPg(t *testing.T) *PgStorage {
@@ -71,5 +73,46 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	s := newTestPg(t)
 	if err := Migrate(s.db); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPgStorageUpdateBatch(t *testing.T) {
+	s := newTestPg(t)
+	g1, g2 := 1.5, 2.5
+	c1, c2 := int64(3), int64(4)
+	batch := []model.Metrics{
+		{ID: "g", MType: model.Gauge, Value: &g1},
+		{ID: "g", MType: model.Gauge, Value: &g2},
+		{ID: "c", MType: model.Counter, Delta: &c1},
+		{ID: "c", MType: model.Counter, Delta: &c2},
+	}
+	if err := s.UpdateBatch(ctx, batch); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.GetGauge(ctx, "g"); err != nil || v != 2.5 {
+		t.Errorf("gauge = %v, %v", v, err)
+	}
+	if v, err := s.GetCounter(ctx, "c"); err != nil || v != 7 {
+		t.Errorf("counter = %v, %v", v, err)
+	}
+}
+
+func TestPgStorageUpdateBatchRollsBack(t *testing.T) {
+	s := newTestPg(t)
+	g := 1.5
+	max, one := int64(math.MaxInt64), int64(1)
+	batch := []model.Metrics{
+		{ID: "g", MType: model.Gauge, Value: &g},
+		{ID: "c", MType: model.Counter, Delta: &max},
+		{ID: "c", MType: model.Counter, Delta: &one},
+	}
+	if err := s.UpdateBatch(ctx, batch); err == nil {
+		t.Fatal("expected counter overflow error")
+	}
+	if _, err := s.GetGauge(ctx, "g"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("failed batch must be rolled back, got %v", err)
+	}
+	if _, err := s.GetCounter(ctx, "c"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("failed batch must be rolled back, got %v", err)
 	}
 }
