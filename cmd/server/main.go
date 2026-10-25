@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
@@ -58,7 +60,19 @@ func main() {
 		}
 	}
 
-	h := handler.NewHandler(storage)
+	// pinger остаётся nil-интерфейсом, если БД не настроена.
+	var pinger handler.Pinger
+	if cfg.DatabaseDSN != "" {
+		// sql.Open сам не подключается — реальная проверка происходит в /ping.
+		db, err := sql.Open("pgx", cfg.DatabaseDSN)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer db.Close()
+		pinger = db
+	}
+
+	h := handler.NewHandler(storage, pinger)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logging(logger))
@@ -74,6 +88,8 @@ func main() {
 	r.Post("/value", h.GetMetricJSON)
 
 	r.Get("/value/{type}/{name}", h.GetMetric)
+
+	r.Get("/ping", h.Ping)
 
 	r.Get("/", h.GetAllMetrics)
 

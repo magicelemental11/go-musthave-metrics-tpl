@@ -114,7 +114,7 @@ func TestGzipEmptyRequestBody(t *testing.T) {
 
 // Сжатый запрос и сжатый ответ через настоящий JSON-хендлер.
 func TestGzipWithJSONHandler(t *testing.T) {
-	h := handler.NewHandler(repository.NewMemStorage())
+	h := handler.NewHandler(repository.NewMemStorage(), nil)
 	r := chi.NewRouter()
 	r.Use(Gzip)
 	r.Post("/update", h.UpdateMetricJSON)

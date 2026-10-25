@@ -19,6 +19,7 @@ type ServerConfig struct {
 	StoreInterval   time.Duration // 0 — синхронная запись
 	FileStoragePath string        // пустая строка отключает сохранение
 	Restore         bool
+	DatabaseDSN     string // пустая строка — БД не используется
 }
 
 type AgentConfig struct {
@@ -34,6 +35,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 	storeInterval := fs.Int("i", defaultStoreInterval, "store interval in seconds (0 - synchronous)")
 	filePath := fs.String("f", defaultFileStoragePath, "file storage path (empty - disabled)")
 	restore := fs.Bool("r", true, "restore metrics from file on start")
+	dsn := fs.String("d", "", "database DSN (empty - disabled)")
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
@@ -59,6 +61,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 		StoreInterval:   interval,
 		FileStoragePath: filePathValue,
 		Restore:         restoreValue,
+		DatabaseDSN:     envString("DATABASE_DSN", *dsn),
 	}, nil
 }
 
