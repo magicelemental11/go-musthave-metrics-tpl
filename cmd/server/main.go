@@ -38,11 +38,25 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	mem := repository.NewMemStorage()
-	var storage repository.Storage = mem
+	var pinger handler.Pinger
+	var storage repository.Storage
 	var fileStorage *repository.FileStorage
 
-	if cfg.FileStoragePath != "" {
+	switch backendFor(cfg) {
+	case backendPostgres:
+		// sql.Open не подключается к БД, соединение проверит Migrate.
+		db, err := sql.Open("pgx", cfg.DatabaseDSN)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer db.Close()
+		if err := repository.Migrate(db); err != nil {
+			log.Fatalf("migrations failed: %v", err)
+		}
+		pinger = db
+		storage = repository.NewPgStorage(db)
+	case backendFile:
+		mem := repository.NewMemStorage()
 		fileStorage = repository.NewFileStorage(mem, cfg.FileStoragePath, cfg.StoreInterval == 0)
 		storage = fileStorage
 
@@ -58,18 +72,8 @@ func main() {
 				savePeriodically(ctx, fileStorage, cfg.StoreInterval)
 			}()
 		}
-	}
-
-	// pinger остаётся nil-интерфейсом, если БД не настроена.
-	var pinger handler.Pinger
-	if cfg.DatabaseDSN != "" {
-		// sql.Open сам не подключается — реальная проверка происходит в /ping.
-		db, err := sql.Open("pgx", cfg.DatabaseDSN)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer db.Close()
-		pinger = db
+	default:
+		storage = repository.NewMemStorage()
 	}
 
 	h := handler.NewHandler(storage, pinger)
@@ -126,6 +130,23 @@ func main() {
 		if err := fileStorage.Save(); err != nil {
 			log.Printf("final save failed: %v", err)
 		}
+	}
+}
+
+const (
+	backendPostgres = "postgres"
+	backendFile     = "file"
+	backendMemory   = "memory"
+)
+
+func backendFor(cfg config.ServerConfig) string {
+	switch {
+	case cfg.DatabaseDSN != "":
+		return backendPostgres
+	case cfg.FileStoragePath != "":
+		return backendFile
+	default:
+		return backendMemory
 	}
 }
 
