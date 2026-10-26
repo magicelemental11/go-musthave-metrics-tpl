@@ -31,6 +31,9 @@ func decodeMetrics(w http.ResponseWriter, r *http.Request) (model.Metrics, bool)
 	return m, true
 }
 
+// UpdateMetricJSON stores a single model.Metrics from the JSON body and echoes it back.
+// For counters the echoed Delta is the accumulated total.
+// It responds 400 for malformed JSON, an unknown type or a missing value, and 404 for an empty id.
 func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 	m, ok := decodeMetrics(w, r)
 	if !ok {
@@ -67,9 +70,12 @@ func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.publishAudit(r, m.ID)
 	writeJSON(w, http.StatusOK, m)
 }
 
+// GetMetricJSON fills in the value of the model.Metrics identified by the JSON body.
+// It responds 404 if the metric does not exist and 400 for malformed JSON or an unknown type.
 func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	m, ok := decodeMetrics(w, r)
 	if !ok {
