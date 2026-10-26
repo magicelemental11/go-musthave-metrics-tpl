@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/pprof"
@@ -41,23 +42,43 @@ func main() {
 		log.Fatal(err)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	defer stop()
+	// After the first signal the default behaviour is restored, so a second one kills a hung shutdown.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+
+	if err := run(ctx, cfg); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// run serves until ctx is cancelled. Shutdown order: stop accepting and drain HTTP requests,
+// stop periodic saving, save once more, then close audit and the database (deferred).
+// After a Shutdown timeout the remaining connections are closed before saving.
+func run(ctx context.Context, cfg config.ServerConfig) error {
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
+
 	var privKey *rsa.PrivateKey
 	if cfg.CryptoKey != "" {
+		var err error
 		if privKey, err = rsacrypt.LoadPrivateKey(cfg.CryptoKey); err != nil {
-			log.Fatal(err)
+			return err
 		}
 	}
 
 	logger, err := zap.NewProduction()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer logger.Sync()
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	var wg sync.WaitGroup
 
 	var pinger handler.Pinger
 	var storage repository.Storage
@@ -69,11 +90,11 @@ func main() {
 		var db *sql.DB
 		db, err = sql.Open("pgx", cfg.DatabaseDSN)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		defer db.Close()
 		if err = repository.Migrate(db); err != nil {
-			log.Fatalf("migrations failed: %v", err)
+			return fmt.Errorf("migrations failed: %w", err)
 		}
 		pinger = db
 		storage = repository.NewPgStorage(db)
@@ -101,7 +122,7 @@ func main() {
 	h := handler.NewHandler(storage, pinger)
 	subject, err := buildAudit(cfg)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if subject != nil {
 		defer func() {
@@ -150,29 +171,37 @@ func main() {
 	go func() { errCh <- srv.ListenAndServe() }()
 	log.Println("Server address:", cfg.Address)
 
+	var runErr error
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
+			runErr = err
 		}
 	case <-ctx.Done():
 		log.Println("shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancelShutdown()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("shutdown error: %v", err)
+			if err := srv.Close(); err != nil {
+				log.Printf("close server: %v", err)
+			}
 		}
 	}
 
-	stop()
+	cancel()
 	wg.Wait() // background saving must finish before the final save
 
-	if fileStorage != nil {
+	// A server that never started has nothing to save and the file may hold data that was not restored.
+	if fileStorage != nil && runErr == nil {
 		if err := fileStorage.Save(); err != nil {
 			log.Printf("final save failed: %v", err)
 		}
 	}
+	return runErr
 }
+
+const shutdownTimeout = 5 * time.Second
 
 const (
 	backendPostgres = "postgres"
