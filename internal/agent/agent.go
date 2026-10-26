@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/rsacrypt"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/sign"
 )
 
@@ -41,6 +43,7 @@ type Agent struct {
 	gauges    map[string]float64
 	delays    []time.Duration
 	key       string
+	pubKey    *rsa.PublicKey
 	rateLimit int
 }
 
@@ -53,6 +56,11 @@ func NewAgent(key string, rateLimit int) *Agent {
 		gauges:    make(map[string]float64),
 		delays:    retry.DefaultDelays,
 	}
+}
+
+func (a *Agent) WithPublicKey(pub *rsa.PublicKey) *Agent {
+	a.pubKey = pub
+	return a
 }
 
 // CollectMetrics reads runtime.MemStats and increments PollCount.
@@ -142,7 +150,7 @@ func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 	runPool(a.rateLimit, len(chunks), func(i int) {
 		var status int
 		err := retry.Do(ctx, a.delays, func() (err error) {
-			status, err = sendBatch(ctx, serverAddr+"/updates/", a.key, chunks[i])
+			status, err = sendBatch(ctx, serverAddr+"/updates/", a.key, a.pubKey, chunks[i])
 			return err
 		}, isTransientNetErr)
 		if err != nil {
@@ -196,7 +204,7 @@ func isTransientNetErr(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-func sendBatch(ctx context.Context, url, key string, batch []model.Metrics) (int, error) {
+func sendBatch(ctx context.Context, url, key string, pub *rsa.PublicKey, batch []model.Metrics) (int, error) {
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return 0, fmt.Errorf("marshal: %w", err)
@@ -212,14 +220,29 @@ func sendBatch(ctx context.Context, url, key string, batch []model.Metrics) (int
 		return 0, fmt.Errorf("gzip: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
+	// The signature covers the gzip body before encryption: the server decrypts before verifying.
+	var signature string
+	if key != "" {
+		signature = sign.Sign(key, buf.Bytes())
+	}
+	payload := buf.Bytes()
+	if pub != nil {
+		if payload, err = rsacrypt.Encrypt(pub, payload); err != nil {
+			return 0, fmt.Errorf("encrypt: %w", err)
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return 0, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
-	if key != "" {
-		req.Header.Set(sign.Header, sign.Sign(key, buf.Bytes()))
+	if signature != "" {
+		req.Header.Set(sign.Header, signature)
+	}
+	if pub != nil {
+		req.Header.Set(rsacrypt.Header, rsacrypt.HeaderValue)
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {

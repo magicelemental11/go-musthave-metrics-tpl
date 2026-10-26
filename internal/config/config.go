@@ -23,6 +23,7 @@ type ServerConfig struct {
 	Restore         bool
 	DatabaseDSN     string // empty means no database
 	Key             string // empty disables signing
+	CryptoKey       string // path to the RSA private key, empty disables decryption
 	AuditFile       string
 	AuditURL        string
 	PprofAddress    string
@@ -34,6 +35,7 @@ type AgentConfig struct {
 	PollInterval   time.Duration
 	ReportInterval time.Duration
 	Key            string
+	CryptoKey      string // path to the RSA public key, empty disables encryption
 	RateLimit      int
 }
 
@@ -46,6 +48,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 	restore := fs.Bool("r", true, "restore metrics from file on start")
 	dsn := fs.String("d", "", "database DSN (empty - disabled)")
 	key := fs.String("k", "", "signing key (empty - disabled)")
+	cryptoKey := fs.String("crypto-key", "", "path to the RSA private key (empty - disabled)")
 	auditFile := fs.String("audit-file", "", "audit log file path (empty - disabled)")
 	auditURL := fs.String("audit-url", "", "audit receiver URL (empty - disabled)")
 	pprofAddress := fs.String("pprof-address", "", "pprof listen address (empty - disabled)")
@@ -76,6 +79,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 		Restore:         restoreValue,
 		DatabaseDSN:     envString("DATABASE_DSN", *dsn),
 		Key:             envString("KEY", *key),
+		CryptoKey:       envString("CRYPTO_KEY", *cryptoKey),
 		AuditFile:       envString("AUDIT_FILE", *auditFile),
 		AuditURL:        envString("AUDIT_URL", *auditURL),
 		PprofAddress:    envString("PPROF_ADDRESS", *pprofAddress),
@@ -89,6 +93,7 @@ func LoadAgent(args []string) (AgentConfig, error) {
 	poll := fs.Int("p", 2, "poll interval in seconds")
 	report := fs.Int("r", 10, "report interval in seconds")
 	key := fs.String("k", "", "signing key (empty - disabled)")
+	cryptoKey := fs.String("crypto-key", "", "path to the RSA public key (empty - disabled)")
 	limit := fs.Int("l", 1, "max concurrent requests to the server")
 	if err := fs.Parse(args); err != nil {
 		return AgentConfig{}, err
@@ -119,6 +124,7 @@ func LoadAgent(args []string) (AgentConfig, error) {
 		PollInterval:   pollInterval,
 		ReportInterval: reportInterval,
 		Key:            envString("KEY", *key),
+		CryptoKey:      envString("CRYPTO_KEY", *cryptoKey),
 		RateLimit:      rateLimit,
 	}, nil
 }

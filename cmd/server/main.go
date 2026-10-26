@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
 	"database/sql"
 	"errors"
 	"log"
@@ -23,6 +24,7 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/rsacrypt"
 )
 
 var (
@@ -37,6 +39,13 @@ func main() {
 	cfg, err := config.LoadServer(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	var privKey *rsa.PrivateKey
+	if cfg.CryptoKey != "" {
+		if privKey, err = rsacrypt.LoadPrivateKey(cfg.CryptoKey); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	logger, err := zap.NewProduction()
@@ -105,6 +114,7 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logging(logger))
+	r.Use(middleware.Decrypt(privKey))
 	r.Use(middleware.Sign(cfg.Key))
 	r.Use(middleware.Gzip)
 

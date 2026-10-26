@@ -262,3 +262,31 @@ func TestLoadServerPprof(t *testing.T) {
 		}
 	})
 }
+
+func TestCryptoKey(t *testing.T) {
+	loaders := map[string]func(args []string) (string, error){
+		"server": func(args []string) (string, error) {
+			cfg, err := LoadServer(args)
+			return cfg.CryptoKey, err
+		},
+		"agent": func(args []string) (string, error) {
+			cfg, err := LoadAgent(args)
+			return cfg.CryptoKey, err
+		},
+	}
+	for name, load := range loaders {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CRYPTO_KEY", "")
+			if got, err := load(nil); err != nil || got != "" {
+				t.Fatalf("default: got %q, %v", got, err)
+			}
+			if got, err := load([]string{"-crypto-key", "flag.pem"}); err != nil || got != "flag.pem" {
+				t.Fatalf("flag: got %q, %v", got, err)
+			}
+			t.Setenv("CRYPTO_KEY", "env.pem")
+			if got, err := load([]string{"-crypto-key", "flag.pem"}); err != nil || got != "env.pem" {
+				t.Fatalf("env over flag: got %q, %v", got, err)
+			}
+		})
+	}
+}
