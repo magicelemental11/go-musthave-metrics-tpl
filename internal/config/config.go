@@ -39,7 +39,7 @@ type AgentConfig struct {
 	RateLimit      int
 }
 
-// LoadServer parses args into a ServerConfig. Precedence: environment variable, flag, default.
+// LoadServer parses args into a ServerConfig. Precedence: environment variable, flag, config file, default.
 func LoadServer(args []string) (ServerConfig, error) {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
@@ -52,11 +52,27 @@ func LoadServer(args []string) (ServerConfig, error) {
 	auditFile := fs.String("audit-file", "", "audit log file path (empty - disabled)")
 	auditURL := fs.String("audit-url", "", "audit receiver URL (empty - disabled)")
 	pprofAddress := fs.String("pprof-address", "", "pprof listen address (empty - disabled)")
+	configPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
 
-	interval, err := seconds("STORE_INTERVAL", *storeInterval, 0)
+	var file serverFile
+	if err := loadFile(envString("CONFIG", *configPath), &file); err != nil {
+		return ServerConfig{}, err
+	}
+	set := setFlags(fs)
+	fromFile(set, "a", address, file.Address)
+	fromFile(set, "r", restore, file.Restore)
+	fromFile(set, "f", filePath, file.StoreFile)
+	fromFile(set, "d", dsn, file.DatabaseDSN)
+	fromFile(set, "k", key, file.Key)
+	fromFile(set, "crypto-key", cryptoKey, file.CryptoKey)
+	fromFile(set, "audit-file", auditFile, file.AuditFile)
+	fromFile(set, "audit-url", auditURL, file.AuditURL)
+	fromFile(set, "pprof-address", pprofAddress, file.PprofAddress)
+
+	storeEvery, err := interval("STORE_INTERVAL", *storeInterval, set["i"], file.StoreInterval, 0)
 	if err != nil {
 		return ServerConfig{}, err
 	}
@@ -74,7 +90,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 
 	return ServerConfig{
 		Address:         envString("ADDRESS", *address),
-		StoreInterval:   interval,
+		StoreInterval:   storeEvery,
 		FileStoragePath: filePathValue,
 		Restore:         restoreValue,
 		DatabaseDSN:     envString("DATABASE_DSN", *dsn),
@@ -86,7 +102,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 	}, nil
 }
 
-// LoadAgent parses args into an AgentConfig. Precedence: environment variable, flag, default.
+// LoadAgent parses args into an AgentConfig. Precedence: environment variable, flag, config file, default.
 func LoadAgent(args []string) (AgentConfig, error) {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	address := fs.String("a", defaultAddress, "server address")
@@ -95,15 +111,26 @@ func LoadAgent(args []string) (AgentConfig, error) {
 	key := fs.String("k", "", "signing key (empty - disabled)")
 	cryptoKey := fs.String("crypto-key", "", "path to the RSA public key (empty - disabled)")
 	limit := fs.Int("l", 1, "max concurrent requests to the server")
+	configPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return AgentConfig{}, err
 	}
 
-	pollInterval, err := seconds("POLL_INTERVAL", *poll, 1)
+	var file agentFile
+	if err := loadFile(envString("CONFIG", *configPath), &file); err != nil {
+		return AgentConfig{}, err
+	}
+	set := setFlags(fs)
+	fromFile(set, "a", address, file.Address)
+	fromFile(set, "k", key, file.Key)
+	fromFile(set, "crypto-key", cryptoKey, file.CryptoKey)
+	fromFile(set, "l", limit, file.RateLimit)
+
+	pollInterval, err := interval("POLL_INTERVAL", *poll, set["p"], file.PollInterval, 1)
 	if err != nil {
 		return AgentConfig{}, err
 	}
-	reportInterval, err := seconds("REPORT_INTERVAL", *report, 1)
+	reportInterval, err := interval("REPORT_INTERVAL", *report, set["r"], file.ReportInterval, 1)
 	if err != nil {
 		return AgentConfig{}, err
 	}
@@ -136,19 +163,21 @@ func envString(name, fallback string) string {
 	return fallback
 }
 
-// seconds reads an interval from the environment variable name, falling back to the flag.
-// The value must not be less than min seconds.
-func seconds(name string, flagValue, min int) (time.Duration, error) {
-	n := flagValue
+// interval resolves an interval: environment variable (seconds), then flag (seconds), then file, then the flag default.
+// The result must not be less than min seconds.
+func interval(name string, flagValue int, flagSet bool, fileValue *duration, min int) (time.Duration, error) {
+	d := time.Duration(flagValue) * time.Second
 	if v := os.Getenv(name); v != "" {
-		parsed, err := strconv.Atoi(v)
+		n, err := strconv.Atoi(v)
 		if err != nil {
 			return 0, fmt.Errorf("%s must be an integer number of seconds, got %q", name, v)
 		}
-		n = parsed
+		d = time.Duration(n) * time.Second
+	} else if !flagSet && fileValue != nil {
+		d = time.Duration(*fileValue)
 	}
-	if n < min {
-		return 0, fmt.Errorf("%s (or its flag) must be at least %d seconds, got %d", name, min, n)
+	if d < time.Duration(min)*time.Second {
+		return 0, fmt.Errorf("%s (or its flag or config file entry) must be at least %d seconds, got %s", name, min, d)
 	}
-	return time.Duration(n) * time.Second, nil
+	return d, nil
 }
