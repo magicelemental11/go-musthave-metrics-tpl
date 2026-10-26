@@ -12,6 +12,7 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/agent"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/buildinfo"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/rsacrypt"
 )
 
 var (
@@ -32,6 +33,13 @@ func main() {
 	defer stop()
 
 	a := agent.NewAgent(cfg.Key, cfg.RateLimit)
+	if cfg.CryptoKey != "" {
+		pub, err := rsacrypt.LoadPublicKey(cfg.CryptoKey)
+		if err != nil {
+			log.Fatal(err)
+		}
+		a.WithPublicKey(pub)
+	}
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
