@@ -14,6 +14,7 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// Migrate applies the embedded SQL migrations to db. Already applied migrations are skipped.
 func Migrate(db *sql.DB) error {
 	src, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {

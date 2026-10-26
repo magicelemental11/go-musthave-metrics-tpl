@@ -1,17 +1,21 @@
+// Package model defines the metric types shared by the server and the agent.
 package model
 
 import "errors"
 
+//go:generate go run ../../cmd/reset
+
+// Metric types.
 const (
 	Counter = "counter"
 	Gauge   = "gauge"
 )
 
-// NOTE: Не усложняем пример, вводя иерархическую вложенность структур.
-// Органичиваясь плоской моделью.
-// Delta и Value объявлены через указатели,
-// что бы отличать значение "0", от не заданного значения
-// и соответственно не кодировать в структуру.
+// Metrics is the JSON representation of a metric.
+// Delta is set for counters and Value for gauges; both are pointers
+// so that zero can be told apart from an absent value.
+//
+// generate:reset
 type Metrics struct {
 	ID    string   `json:"id"`
 	MType string   `json:"type"`
@@ -20,6 +24,7 @@ type Metrics struct {
 	Hash  string   `json:"hash,omitempty"`
 }
 
+// Validate reports whether the metric has an id, a known type and the value matching that type.
 func (m Metrics) Validate() error {
 	if m.ID == "" {
 		return errors.New("metric id is required")

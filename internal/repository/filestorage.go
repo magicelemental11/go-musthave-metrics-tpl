@@ -14,8 +14,8 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
-// FileStorage — MemStorage с сохранением в JSON-файл.
-// При syncSave каждое обновление сразу пишется на диск.
+// FileStorage is a MemStorage persisted to a JSON file.
+// With syncSave every update is written to disk immediately.
 type FileStorage struct {
 	*MemStorage
 	path     string
@@ -23,10 +23,12 @@ type FileStorage struct {
 	saveMu   sync.Mutex
 }
 
+// NewFileStorage wraps mem so that its metrics are saved to path.
 func NewFileStorage(mem *MemStorage, path string, syncSave bool) *FileStorage {
 	return &FileStorage{MemStorage: mem, path: path, syncSave: syncSave}
 }
 
+// UpdateGauge sets the gauge and saves the file if syncSave is on.
 func (f *FileStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
 	if err := f.MemStorage.UpdateGauge(ctx, name, value); err != nil {
 		return err
@@ -35,6 +37,7 @@ func (f *FileStorage) UpdateGauge(ctx context.Context, name string, value float6
 	return nil
 }
 
+// UpdateCounter adds to the counter, returns the new total and saves the file if syncSave is on.
 func (f *FileStorage) UpdateCounter(ctx context.Context, name string, value int64) (int64, error) {
 	total, err := f.MemStorage.UpdateCounter(ctx, name, value)
 	if err != nil {
@@ -44,6 +47,7 @@ func (f *FileStorage) UpdateCounter(ctx context.Context, name string, value int6
 	return total, nil
 }
 
+// UpdateBatch applies all metrics and saves the file if syncSave is on.
 func (f *FileStorage) UpdateBatch(ctx context.Context, metrics []model.Metrics) error {
 	if err := f.MemStorage.UpdateBatch(ctx, metrics); err != nil {
 		return err
@@ -61,7 +65,7 @@ func (f *FileStorage) saveIfSync() {
 	}
 }
 
-// Save записывает метрики во временный файл и переименовывает его, чтобы не испортить старый файл при сбое.
+// Save writes the metrics to a temporary file and renames it, so a failure cannot corrupt the old file.
 func (f *FileStorage) Save() error {
 	f.saveMu.Lock()
 	defer f.saveMu.Unlock()
@@ -71,7 +75,7 @@ func (f *FileStorage) Save() error {
 		return fmt.Errorf("marshal metrics: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
@@ -98,7 +102,7 @@ func (f *FileStorage) Save() error {
 	return nil
 }
 
-// Restore загружает метрики из файла. Отсутствие файла не считается ошибкой.
+// Restore loads metrics from the file. A missing file is not an error.
 func (f *FileStorage) Restore() error {
 	data, err := os.ReadFile(f.path)
 	if errors.Is(err, fs.ErrNotExist) {
