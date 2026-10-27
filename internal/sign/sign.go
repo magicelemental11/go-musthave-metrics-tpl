@@ -3,7 +3,7 @@ package sign
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/hex"
+	"encoding/base64"
 )
 
 const Header = "HashSHA256"
@@ -15,11 +15,11 @@ func mac(key string, data []byte) []byte {
 }
 
 func Sign(key string, data []byte) string {
-	return hex.EncodeToString(mac(key, data))
+	return base64.StdEncoding.EncodeToString(mac(key, data))
 }
 
 func Valid(key string, data []byte, got string) bool {
-	gotBytes, err := hex.DecodeString(got)
+	gotBytes, err := base64.StdEncoding.DecodeString(got)
 	if err != nil {
 		return false
 	}

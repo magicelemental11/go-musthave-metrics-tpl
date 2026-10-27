@@ -41,7 +41,7 @@ type Agent struct {
 func NewAgent(key string, rateLimit int) *Agent {
 	return &Agent{
 		key:       key,
-		rateLimit: rateLimit,
+		rateLimit: max(rateLimit, 1),
 		gauges:    make(map[string]float64),
 		delays:    retry.DefaultDelays,
 	}
@@ -128,7 +128,7 @@ func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 	}
 
 	chunks := splitBatch(batch, a.rateLimit)
-	runPool(a.rateLimit, len(chunks), func(i int) {
+	runPool(ctx, a.rateLimit, len(chunks), func(i int) {
 		var status int
 		err := retry.Do(ctx, a.delays, func() (err error) {
 			status, err = sendBatch(ctx, serverAddr+"/updates/", a.key, chunks[i])
@@ -139,7 +139,7 @@ func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 			return
 		}
 		log.Printf("sent batch of %d metrics → %d", len(chunks[i]), status)
-		if i == 0 && status == http.StatusOK && pollCount > 0 {
+		if status == http.StatusOK && hasPollCount(chunks[i]) {
 			// Вычитаем только отправленное: опросы, сделанные во время отправки, не теряем.
 			a.mu.Lock()
 			a.pollCount -= pollCount
@@ -157,8 +157,17 @@ func splitBatch(batch []model.Metrics, parts int) [][]model.Metrics {
 	return chunks
 }
 
-func runPool(limit, n int, job func(i int)) {
-	jobs := make(chan int)
+func hasPollCount(batch []model.Metrics) bool {
+	for _, m := range batch {
+		if m.ID == "PollCount" && m.MType == model.Counter {
+			return true
+		}
+	}
+	return false
+}
+
+func runPool(ctx context.Context, limit, n int, job func(i int)) {
+	jobs := make(chan int, min(limit, n))
 	var wg sync.WaitGroup
 	for range min(limit, n) {
 		wg.Add(1)
@@ -169,8 +178,13 @@ func runPool(limit, n int, job func(i int)) {
 			}
 		}()
 	}
+dispatch:
 	for i := range n {
-		jobs <- i
+		select {
+		case <-ctx.Done():
+			break dispatch
+		case jobs <- i:
+		}
 	}
 	close(jobs)
 	wg.Wait()
@@ -206,7 +220,7 @@ func sendBatch(ctx context.Context, url, key string, batch []model.Metrics) (int
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	if key != "" {
-		req.Header.Set(sign.Header, sign.Sign(key, buf.Bytes()))
+		req.Header.Set(sign.Header, sign.Sign(key, body))
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {

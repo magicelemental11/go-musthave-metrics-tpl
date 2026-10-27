@@ -55,14 +55,6 @@ func TestSignWithoutHeaderPasses(t *testing.T) {
 	}
 }
 
-func TestSignWithoutKeyDisabled(t *testing.T) {
-	h := Sign("")(http.HandlerFunc(echo))
-	rec := do(h, "hello", "bad")
-	if rec.Code != http.StatusOK || rec.Header().Get(sign.Header) != "" {
-		t.Fatalf("got %d, header %q", rec.Code, rec.Header().Get(sign.Header))
-	}
-}
-
 func TestSignKeepsStatus(t *testing.T) {
 	h := Sign("k")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) }))
 	if rec := do(h, "", ""); rec.Code != http.StatusNotFound {
@@ -70,12 +62,12 @@ func TestSignKeepsStatus(t *testing.T) {
 	}
 }
 
-func TestSignCoversGzippedResponse(t *testing.T) {
+func TestSignCoversUncompressedResponse(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"ok":true}`))
 	})
-	h := Sign("k")(Gzip(handler))
+	h := Gzip(Sign("k")(handler))
 
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
@@ -85,26 +77,41 @@ func TestSignCoversGzippedResponse(t *testing.T) {
 	if rec.Header().Get("Content-Encoding") != "gzip" {
 		t.Fatal("response is not gzipped")
 	}
-	if got, want := rec.Header().Get(sign.Header), sign.Sign("k", rec.Body.Bytes()); got != want {
-		t.Fatalf("hash %q does not cover gzipped bytes, want %q", got, want)
+	zr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sign.Valid("k", plain, rec.Header().Get(sign.Header)) {
+		t.Fatalf("hash does not cover uncompressed body %q", plain)
 	}
 }
 
-func TestSignVerifiesGzippedRequest(t *testing.T) {
+func TestSignVerifiesUncompressedRequest(t *testing.T) {
 	var gz bytes.Buffer
 	zw := gzip.NewWriter(&gz)
 	zw.Write([]byte("hello"))
 	zw.Close()
-	wire := gz.Bytes()
 
-	h := Sign("k")(Gzip(http.HandlerFunc(echo)))
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(wire))
+	h := Gzip(Sign("k")(http.HandlerFunc(echo)))
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(gz.Bytes()))
 	req.Header.Set("Content-Encoding", "gzip")
-	req.Header.Set(sign.Header, sign.Sign("k", wire))
+	req.Header.Set(sign.Header, sign.Sign("k", []byte("hello")))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK || rec.Body.String() != "hello" {
 		t.Fatalf("got %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSignRejectsTooLargeBody(t *testing.T) {
+	body := strings.Repeat("a", maxSignedBody+1)
+	h := Sign("k")(http.HandlerFunc(echo))
+	if rec := do(h, body, sign.Sign("k", []byte(body))); rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d", rec.Code)
 	}
 }

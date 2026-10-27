@@ -24,14 +24,14 @@ func (w *signWriter) Write(b []byte) (int, error) {
 	return w.buf.Write(b)
 }
 
+const maxSignedBody = 1 << 20
+
+// Sign ставится после Gzip, поэтому проверяет и подписывает несжатые данные.
 func Sign(key string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		if key == "" {
-			return next
-		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if got := r.Header.Get(sign.Header); got != "" {
-				body, err := io.ReadAll(r.Body)
+				body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSignedBody))
 				if err != nil || !sign.Valid(key, body, got) {
 					http.Error(w, "invalid signature", http.StatusBadRequest)
 					return

@@ -15,12 +15,18 @@ func TestSign(t *testing.T) {
 	}
 }
 
+func TestSignIsBase64(t *testing.T) {
+	if got := len(Sign("k", []byte("body"))); got != 44 {
+		t.Fatalf("len %d, want 44", got)
+	}
+}
+
 func TestValid(t *testing.T) {
 	h := Sign("k", []byte("body"))
 	if !Valid("k", []byte("body"), h) {
 		t.Fatal("valid hash rejected")
 	}
-	if Valid("k", []byte("tampered"), h) || Valid("x", []byte("body"), h) || Valid("k", []byte("body"), "zz") {
+	if Valid("k", []byte("tampered"), h) || Valid("x", []byte("body"), h) || Valid("k", []byte("body"), "!!") {
 		t.Fatal("invalid hash accepted")
 	}
 }

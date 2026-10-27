@@ -254,7 +254,12 @@ func TestReportMetricsSignsBody(t *testing.T) {
 		var header string
 		var ok bool
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, _ := io.ReadAll(r.Body)
+			zr, err := gzip.NewReader(r.Body)
+			if err != nil {
+				t.Errorf("gzip: %v", err)
+				return
+			}
+			body, _ := io.ReadAll(zr)
 			header = r.Header.Get(sign.Header)
 			ok = sign.Valid(key, body, header)
 		}))
@@ -274,23 +279,80 @@ func TestReportMetricsSignsBody(t *testing.T) {
 
 func TestRunPoolLimitsConcurrency(t *testing.T) {
 	var current, peak, done atomic.Int32
-	runPool(3, 12, func(int) {
-		n := current.Add(1)
-		for {
-			p := peak.Load()
-			if n <= p || peak.CompareAndSwap(p, n) {
-				break
+	started := make(chan struct{}, 12)
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		runPool(context.Background(), 3, 12, func(int) {
+			n := current.Add(1)
+			for {
+				p := peak.Load()
+				if n <= p || peak.CompareAndSwap(p, n) {
+					break
+				}
 			}
-		}
-		time.Sleep(10 * time.Millisecond)
-		current.Add(-1)
-		done.Add(1)
-	})
+			started <- struct{}{}
+			<-release
+			current.Add(-1)
+			done.Add(1)
+		})
+		close(finished)
+	}()
+
+	for range 3 {
+		<-started
+	}
+	if current.Load() != 3 {
+		t.Fatalf("running %d jobs, want 3", current.Load())
+	}
+	close(release)
+	<-finished
+
 	if done.Load() != 12 {
 		t.Fatalf("ran %d jobs, want 12", done.Load())
 	}
 	if peak.Load() > 3 {
 		t.Fatalf("peak concurrency %d, want at most 3", peak.Load())
+	}
+}
+
+func TestRunPoolStopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var done atomic.Int32
+	runPool(ctx, 1, 100, func(int) { done.Add(1) })
+	if done.Load() == 100 {
+		t.Fatal("all jobs dispatched after cancel")
+	}
+}
+
+func TestReportMetricsResetsPollCountInAnyChunk(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer ts.Close()
+
+	a := NewAgent("", 3)
+	a.CollectMetrics()
+	chunks := splitBatch([]model.Metrics{
+		{ID: "A", MType: model.Gauge}, {ID: "B", MType: model.Gauge}, {ID: "PollCount", MType: model.Counter},
+	}, 3)
+	if !hasPollCount(chunks[2]) || hasPollCount(chunks[0]) {
+		t.Fatal("hasPollCount must find PollCount in its own chunk only")
+	}
+	a.ReportMetrics(context.Background(), ts.URL)
+	if a.pollCount != 0 {
+		t.Errorf("pollCount not reset: %d", a.pollCount)
+	}
+}
+
+func TestNewAgentClampsRateLimit(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer ts.Close()
+
+	a := NewAgent("", 0)
+	a.CollectMetrics()
+	a.ReportMetrics(context.Background(), ts.URL) // не должно паниковать
+	if a.rateLimit != 1 {
+		t.Fatalf("rateLimit %d, want 1", a.rateLimit)
 	}
 }
 
@@ -347,6 +409,8 @@ func TestCollectSystemMetrics(t *testing.T) {
 
 func TestReportMetricsLimitsConcurrentRequests(t *testing.T) {
 	var current, peak, requests atomic.Int32
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := current.Add(1)
 		for {
@@ -355,7 +419,8 @@ func TestReportMetricsLimitsConcurrentRequests(t *testing.T) {
 				break
 			}
 		}
-		time.Sleep(20 * time.Millisecond)
+		started <- struct{}{}
+		<-release
 		current.Add(-1)
 		requests.Add(1)
 	}))
@@ -363,7 +428,17 @@ func TestReportMetricsLimitsConcurrentRequests(t *testing.T) {
 
 	a := NewAgent("", 2)
 	a.CollectMetrics()
-	a.ReportMetrics(context.Background(), ts.URL)
+	finished := make(chan struct{})
+	go func() {
+		a.ReportMetrics(context.Background(), ts.URL)
+		close(finished)
+	}()
+
+	for range 2 {
+		<-started
+	}
+	close(release)
+	<-finished
 
 	if requests.Load() != 2 || peak.Load() > 2 {
 		t.Fatalf("requests=%d peak=%d, want 2 requests and peak <= 2", requests.Load(), peak.Load())
