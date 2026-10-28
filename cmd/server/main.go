@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,10 +20,12 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/audit"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/buildinfo"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/grpcserver"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
@@ -56,10 +60,14 @@ func main() {
 	}
 }
 
-// run serves until ctx is cancelled. Shutdown order: stop accepting and drain HTTP requests,
-// stop periodic saving, save once more, then close audit and the database (deferred).
-// After a Shutdown timeout the remaining connections are closed before saving.
-// A failure of a background goroutine (periodic saving) shuts the server down and is returned.
+// run serves HTTP, and gRPC when cfg.GRPCAddress is set, until ctx is cancelled or a server fails.
+// Shutdown order: stop accepting and drain HTTP and gRPC requests in parallel, stop periodic saving,
+// save once more, then close audit and the database (deferred).
+// After shutdownTimeout the remaining connections of both servers are closed before saving.
+// Both ports are bound before anything is served: if either is taken, run returns without saving,
+// so a file that was not restored is not overwritten. Once serving has started, the final save
+// runs even if a server fails.
+// A failure of a background goroutine (periodic saving) also shuts the servers down and is returned.
 func run(ctx context.Context, cfg config.ServerConfig) error {
 	ctx, cancel := context.WithCancel(ctx)
 	g, ctx := errgroup.WithContext(ctx)
@@ -131,8 +139,8 @@ func run(ctx context.Context, cfg config.ServerConfig) error {
 	}
 	if subject != nil {
 		defer func() {
-			if err := subject.Close(); err != nil {
-				log.Printf("close audit: %v", err)
+			if closeErr := subject.Close(); closeErr != nil {
+				log.Printf("close audit: %v", closeErr)
 			}
 		}()
 		h.WithAudit(subject)
@@ -193,41 +201,94 @@ func run(ctx context.Context, cfg config.ServerConfig) error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	httpLis, err := net.Listen("tcp", cfg.Address)
+	if err != nil {
+		return err
+	}
+	var grpcLis net.Listener
+	if cfg.GRPCAddress != "" {
+		if grpcLis, err = net.Listen("tcp", cfg.GRPCAddress); err != nil {
+			httpLis.Close()
+			return fmt.Errorf("grpc listen: %w", err)
+		}
+	}
+
+	// Both servers report here; the buffer lets the second one exit after the first has failed.
+	errCh := make(chan error, 2)
+	go func() { errCh <- srv.Serve(httpLis) }()
 	log.Println("Server address:", cfg.Address)
 
-	var serveErr error
+	var grpcSrv *grpc.Server
+	if grpcLis != nil {
+		grpcSrv = grpcserver.NewServer(h, trusted, logger)
+		go func() { errCh <- grpcSrv.Serve(grpcLis) }()
+		log.Println("gRPC address:", cfg.GRPCAddress)
+	}
+
+	var runErr error
 	select {
 	case err := <-errCh:
-		if !errors.Is(err, http.ErrServerClosed) {
-			serveErr = err
+		if !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, grpc.ErrServerStopped) {
+			runErr = err
 		}
 	case <-ctx.Done():
 		log.Println("shutting down")
-		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancelShutdown()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("shutdown error: %v", err)
-			if err := srv.Close(); err != nil {
-				log.Printf("close server: %v", err)
-			}
-		}
 	}
+	// After a failure the other server is still running and must be stopped too.
+	shutdown(srv, grpcSrv)
 
 	cancel()
 	groupErr := g.Wait() // background saving must finish before the final save
 
-	// A server that never started has nothing to save and the file may hold data that was not restored.
-	if fileStorage != nil && serveErr == nil {
+	if fileStorage != nil {
 		if err := fileStorage.Save(); err != nil {
 			log.Printf("final save failed: %v", err)
 		}
 	}
-	return errors.Join(serveErr, groupErr)
+	return errors.Join(runErr, groupErr)
 }
 
 const shutdownTimeout = 5 * time.Second
+
+// shutdown drains both servers in parallel within shutdownTimeout and then closes what is left.
+// grpcSrv may be nil.
+func shutdown(srv *http.Server, grpcSrv *grpc.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	if grpcSrv != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stopGRPC(ctx, grpcSrv)
+		}()
+	}
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("shutdown error: %v", err)
+		if err := srv.Close(); err != nil {
+			log.Printf("close server: %v", err)
+		}
+	}
+	wg.Wait()
+}
+
+// stopGRPC waits for in-flight calls like GracefulStop, which takes no context, and falls back
+// to Stop when ctx expires first.
+func stopGRPC(ctx context.Context, s *grpc.Server) {
+	done := make(chan struct{})
+	go func() {
+		s.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		log.Printf("grpc shutdown: %v", ctx.Err())
+		s.Stop()
+		<-done
+	}
+}
 
 const (
 	backendPostgres = "postgres"

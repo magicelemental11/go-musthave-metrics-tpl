@@ -35,6 +35,7 @@ type serverFile struct {
 	AuditURL      *string   `json:"audit_url"`
 	PprofAddress  *string   `json:"pprof_address"`
 	TrustedSubnet *string   `json:"trusted_subnet"`
+	GRPCAddress   *string   `json:"grpc_address"`
 }
 
 type agentFile struct {
@@ -44,6 +45,7 @@ type agentFile struct {
 	CryptoKey      *string   `json:"crypto_key"`
 	Key            *string   `json:"key"`
 	RateLimit      *int      `json:"rate_limit"`
+	GRPCAddress    *string   `json:"grpc_address"`
 }
 
 // loadFile decodes the JSON config at path into dst. An empty path leaves dst untouched.

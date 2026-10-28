@@ -25,8 +25,8 @@ func clearEnv(t *testing.T, names ...string) {
 	}
 }
 
-var serverEnv = []string{"CONFIG", "ADDRESS", "STORE_INTERVAL", "RESTORE", "FILE_STORAGE_PATH", "DATABASE_DSN", "CRYPTO_KEY", "KEY", "AUDIT_FILE", "AUDIT_URL", "PPROF_ADDRESS", "TRUSTED_SUBNET"}
-var agentEnv = []string{"CONFIG", "ADDRESS", "POLL_INTERVAL", "REPORT_INTERVAL", "CRYPTO_KEY", "KEY", "RATE_LIMIT"}
+var serverEnv = []string{"CONFIG", "ADDRESS", "STORE_INTERVAL", "RESTORE", "FILE_STORAGE_PATH", "DATABASE_DSN", "CRYPTO_KEY", "KEY", "AUDIT_FILE", "AUDIT_URL", "PPROF_ADDRESS", "TRUSTED_SUBNET", "GRPC_ADDRESS"}
+var agentEnv = []string{"CONFIG", "ADDRESS", "POLL_INTERVAL", "REPORT_INTERVAL", "CRYPTO_KEY", "KEY", "RATE_LIMIT", "GRPC_ADDRESS"}
 
 func TestServerConfigFile(t *testing.T) {
 	file := `{
