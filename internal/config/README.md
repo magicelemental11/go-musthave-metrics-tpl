@@ -18,6 +18,7 @@
 | Файл аудита | `-audit-file` | `AUDIT_FILE` | `audit_file` | пусто |
 | URL аудита | `-audit-url` | `AUDIT_URL` | `audit_url` | пусто |
 | Адрес pprof | `-pprof-address` | `PPROF_ADDRESS` | `pprof_address` | пусто |
+| Доверенная подсеть агентов (CIDR) | `-t` | `TRUSTED_SUBNET` | `trusted_subnet` | пусто (проверки нет) |
 
 ```json
 {
@@ -26,7 +27,8 @@
     "store_interval": "1s",
     "store_file": "/path/to/file.db",
     "database_dsn": "",
-    "crypto_key": "/path/to/private.pem"
+    "crypto_key": "/path/to/private.pem",
+    "trusted_subnet": "192.168.1.0/24"
 }
 ```
 

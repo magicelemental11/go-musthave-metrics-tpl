@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/subnet"
 )
 
 const (
@@ -27,6 +29,7 @@ type ServerConfig struct {
 	AuditFile       string
 	AuditURL        string
 	PprofAddress    string
+	TrustedSubnet   string // CIDR of agents allowed to send metrics, empty allows everyone
 }
 
 // AgentConfig holds the agent settings.
@@ -52,6 +55,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 	auditFile := fs.String("audit-file", "", "audit log file path (empty - disabled)")
 	auditURL := fs.String("audit-url", "", "audit receiver URL (empty - disabled)")
 	pprofAddress := fs.String("pprof-address", "", "pprof listen address (empty - disabled)")
+	trustedSubnet := fs.String("t", "", "trusted agent subnet in CIDR notation (empty - no check)")
 	configPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
@@ -71,6 +75,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 	fromFile(set, "audit-file", auditFile, file.AuditFile)
 	fromFile(set, "audit-url", auditURL, file.AuditURL)
 	fromFile(set, "pprof-address", pprofAddress, file.PprofAddress)
+	fromFile(set, "t", trustedSubnet, file.TrustedSubnet)
 
 	storeEvery, err := interval("STORE_INTERVAL", *storeInterval, set["i"], file.StoreInterval, 0)
 	if err != nil {
@@ -82,6 +87,10 @@ func LoadServer(args []string) (ServerConfig, error) {
 		if err != nil {
 			return ServerConfig{}, fmt.Errorf("RESTORE must be true or false, got %q", v)
 		}
+	}
+	trustedSubnetValue := envString("TRUSTED_SUBNET", *trustedSubnet)
+	if _, err = subnet.New(trustedSubnetValue); err != nil {
+		return ServerConfig{}, err
 	}
 	filePathValue := *filePath
 	if v, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
@@ -99,6 +108,7 @@ func LoadServer(args []string) (ServerConfig, error) {
 		AuditFile:       envString("AUDIT_FILE", *auditFile),
 		AuditURL:        envString("AUDIT_URL", *auditURL),
 		PprofAddress:    envString("PPROF_ADDRESS", *pprofAddress),
+		TrustedSubnet:   trustedSubnetValue,
 	}, nil
 }
 

@@ -25,7 +25,7 @@ func clearEnv(t *testing.T, names ...string) {
 	}
 }
 
-var serverEnv = []string{"CONFIG", "ADDRESS", "STORE_INTERVAL", "RESTORE", "FILE_STORAGE_PATH", "DATABASE_DSN", "CRYPTO_KEY", "KEY", "AUDIT_FILE", "AUDIT_URL", "PPROF_ADDRESS"}
+var serverEnv = []string{"CONFIG", "ADDRESS", "STORE_INTERVAL", "RESTORE", "FILE_STORAGE_PATH", "DATABASE_DSN", "CRYPTO_KEY", "KEY", "AUDIT_FILE", "AUDIT_URL", "PPROF_ADDRESS", "TRUSTED_SUBNET"}
 var agentEnv = []string{"CONFIG", "ADDRESS", "POLL_INTERVAL", "REPORT_INTERVAL", "CRYPTO_KEY", "KEY", "RATE_LIMIT"}
 
 func TestServerConfigFile(t *testing.T) {
@@ -39,7 +39,8 @@ func TestServerConfigFile(t *testing.T) {
 		"key": "file-key",
 		"audit_file": "file-audit",
 		"audit_url": "http://audit",
-		"pprof_address": "file:6060"
+		"pprof_address": "file:6060",
+		"trusted_subnet": "10.0.0.0/8"
 	}`
 
 	t.Run("file only", func(t *testing.T) {
@@ -52,6 +53,7 @@ func TestServerConfigFile(t *testing.T) {
 			Address: "file:1", StoreInterval: time.Second, FileStoragePath: "/file.db", Restore: false,
 			DatabaseDSN: "file-dsn", Key: "file-key", CryptoKey: "file.pem",
 			AuditFile: "file-audit", AuditURL: "http://audit", PprofAddress: "file:6060",
+			TrustedSubnet: "10.0.0.0/8",
 		}
 		if cfg != want {
 			t.Fatalf("got %+v, want %+v", cfg, want)
