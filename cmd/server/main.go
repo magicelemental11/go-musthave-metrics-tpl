@@ -26,6 +26,7 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/rsacrypt"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/subnet"
 )
 
 var (
@@ -72,6 +73,11 @@ func run(ctx context.Context, cfg config.ServerConfig) error {
 		if privKey, err = rsacrypt.LoadPrivateKey(cfg.CryptoKey); err != nil {
 			return err
 		}
+	}
+
+	trusted, err := subnet.New(cfg.TrustedSubnet)
+	if err != nil {
+		return err
 	}
 
 	logger, err := zap.NewProduction()
@@ -133,27 +139,42 @@ func run(ctx context.Context, cfg config.ServerConfig) error {
 		h.WithAudit(subject)
 	}
 
+	bodyMiddleware := []func(http.Handler) http.Handler{
+		middleware.Decrypt(privKey),
+		middleware.Sign(cfg.Key),
+		middleware.Gzip,
+	}
+
 	r := chi.NewRouter()
 	r.Use(middleware.Logging(logger))
-	r.Use(middleware.Decrypt(privKey))
-	r.Use(middleware.Sign(cfg.Key))
-	r.Use(middleware.Gzip)
 
-	r.Post("/update/{type}/{name}/{value}", h.UpdateMetric)
+	// Only writes are restricted to the trusted subnet. The check comes first, so a body
+	// from an untrusted agent is not decrypted or verified.
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.TrustedSubnet(trusted))
+		r.Use(bodyMiddleware...)
 
-	r.Post("/update/{type}/{name}/", http.NotFound)
-	r.Post("/update/{type}/", http.NotFound)
-	r.Post("/update/", http.NotFound)
+		r.Post("/update/{type}/{name}/{value}", h.UpdateMetric)
+		r.Post("/update", h.UpdateMetricJSON)
+		r.Post("/updates/", h.UpdateMetricsBatch)
+	})
 
-	r.Post("/update", h.UpdateMetricJSON)
-	r.Post("/updates/", h.UpdateMetricsBatch)
-	r.Post("/value", h.GetMetricJSON)
+	r.Group(func(r chi.Router) {
+		r.Use(bodyMiddleware...)
 
-	r.Get("/value/{type}/{name}", h.GetMetric)
+		// Incomplete update paths store nothing, so they answer 404 without the subnet check.
+		r.Post("/update/{type}/{name}/", http.NotFound)
+		r.Post("/update/{type}/", http.NotFound)
+		r.Post("/update/", http.NotFound)
 
-	r.Get("/ping", h.Ping)
+		r.Post("/value", h.GetMetricJSON)
 
-	r.Get("/", h.GetAllMetrics)
+		r.Get("/value/{type}/{name}", h.GetMetric)
+
+		r.Get("/ping", h.Ping)
+
+		r.Get("/", h.GetAllMetrics)
+	})
 
 	if cfg.PprofAddress != "" {
 		defer startPprof(cfg.PprofAddress)()

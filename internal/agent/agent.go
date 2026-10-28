@@ -26,6 +26,7 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/rsacrypt"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/sign"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/subnet"
 )
 
 const requestTimeout = 10 * time.Second
@@ -44,6 +45,7 @@ type Agent struct {
 	delays    []time.Duration
 	key       string
 	pubKey    *rsa.PublicKey
+	realIP    string
 	rateLimit int
 }
 
@@ -61,6 +63,27 @@ func NewAgent(key string, rateLimit int) *Agent {
 func (a *Agent) WithPublicKey(pub *rsa.PublicKey) *Agent {
 	a.pubKey = pub
 	return a
+}
+
+// WithRealIP sets the IP sent in the X-Real-IP header; empty omits the header. It returns a.
+func (a *Agent) WithRealIP(ip string) *Agent {
+	a.realIP = ip
+	return a
+}
+
+// HostIP returns the local IP address the host uses to reach serverAddr (host:port).
+// Dialing UDP sends no packets: it only picks the route and the source address.
+// IPv4 is tried first, so "localhost" gives 127.0.0.1 rather than ::1.
+func HostIP(serverAddr string) (string, error) {
+	conn, err := net.Dial("udp4", serverAddr)
+	if err != nil {
+		conn, err = net.Dial("udp", serverAddr)
+	}
+	if err != nil {
+		return "", fmt.Errorf("host ip: %w", err)
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String(), nil
 }
 
 // CollectMetrics reads runtime.MemStats and increments PollCount.
@@ -150,7 +173,7 @@ func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 	runPool(a.rateLimit, len(chunks), func(i int) {
 		var status int
 		err := retry.Do(ctx, a.delays, func() (err error) {
-			status, err = sendBatch(ctx, serverAddr+"/updates/", a.key, a.pubKey, chunks[i])
+			status, err = a.sendBatch(ctx, serverAddr+"/updates/", chunks[i])
 			return err
 		}, isTransientNetErr)
 		if err != nil {
@@ -204,7 +227,7 @@ func isTransientNetErr(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-func sendBatch(ctx context.Context, url, key string, pub *rsa.PublicKey, batch []model.Metrics) (int, error) {
+func (a *Agent) sendBatch(ctx context.Context, url string, batch []model.Metrics) (int, error) {
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return 0, fmt.Errorf("marshal: %w", err)
@@ -222,12 +245,12 @@ func sendBatch(ctx context.Context, url, key string, pub *rsa.PublicKey, batch [
 
 	// The signature covers the gzip body before encryption: the server decrypts before verifying.
 	var signature string
-	if key != "" {
-		signature = sign.Sign(key, buf.Bytes())
+	if a.key != "" {
+		signature = sign.Sign(a.key, buf.Bytes())
 	}
 	payload := buf.Bytes()
-	if pub != nil {
-		if payload, err = rsacrypt.Encrypt(pub, payload); err != nil {
+	if a.pubKey != nil {
+		if payload, err = rsacrypt.Encrypt(a.pubKey, payload); err != nil {
 			return 0, fmt.Errorf("encrypt: %w", err)
 		}
 	}
@@ -241,8 +264,11 @@ func sendBatch(ctx context.Context, url, key string, pub *rsa.PublicKey, batch [
 	if signature != "" {
 		req.Header.Set(sign.Header, signature)
 	}
-	if pub != nil {
+	if a.pubKey != nil {
 		req.Header.Set(rsacrypt.Header, rsacrypt.HeaderValue)
+	}
+	if a.realIP != "" {
+		req.Header.Set(subnet.Header, a.realIP)
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {

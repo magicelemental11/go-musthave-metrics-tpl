@@ -21,6 +21,7 @@ import (
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/sign"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/subnet"
 )
 
 func TestCollectMetrics(t *testing.T) {
@@ -402,5 +403,80 @@ func TestReportMetricsIncludesSystemMetrics(t *testing.T) {
 		if !seen[name] {
 			t.Errorf("%s was not sent", name)
 		}
+	}
+}
+
+func TestReportMetricsSendsRealIP(t *testing.T) {
+	tests := []struct {
+		name string
+		ip   string
+	}{
+		{"header set", "10.1.2.3"},
+		{"empty omits header", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			var mu sync.Mutex
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				got = append(got, r.Header.Get(subnet.Header))
+				mu.Unlock()
+			}))
+			a := NewAgent("", 1).WithRealIP(tt.ip)
+			a.CollectMetrics()
+			a.ReportMetrics(context.Background(), ts.URL)
+			ts.Close()
+
+			if len(got) == 0 {
+				t.Fatal("no requests")
+			}
+			for _, h := range got {
+				if h != tt.ip {
+					t.Errorf("%s = %q, want %q", subnet.Header, h, tt.ip)
+				}
+			}
+		})
+	}
+}
+
+func TestHostIP(t *testing.T) {
+	tests := []struct {
+		name    string
+		addr    string
+		want    string
+		wantErr bool
+	}{
+		{"ipv4 loopback", "127.0.0.1:8080", "127.0.0.1", false},
+		// localhost resolves to both ::1 and 127.0.0.1; a trusted 127.0.0.0/8 must keep working.
+		{"localhost prefers ipv4", "localhost:8080", "127.0.0.1", false},
+		{"no port", "no-port", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip, err := HostIP(tt.addr)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("want error, got %q", ip)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ip != tt.want {
+				t.Fatalf("HostIP(%q) = %q, want %q", tt.addr, ip, tt.want)
+			}
+		})
+	}
+}
+
+func TestHostIPFallsBackToIPv6(t *testing.T) {
+	ip, err := HostIP("[::1]:8080")
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	if ip != "::1" {
+		t.Fatalf("HostIP = %q, want ::1", ip)
 	}
 }

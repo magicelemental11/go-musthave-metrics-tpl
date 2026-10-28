@@ -34,6 +34,7 @@ type serverFile struct {
 	AuditFile     *string   `json:"audit_file"`
 	AuditURL      *string   `json:"audit_url"`
 	PprofAddress  *string   `json:"pprof_address"`
+	TrustedSubnet *string   `json:"trusted_subnet"`
 }
 
 type agentFile struct {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/subnet"
 )
 
 func TestRunReportsOnShutdown(t *testing.T) {
@@ -46,5 +47,32 @@ func TestRunReportsOnShutdown(t *testing.T) {
 	}
 	if requests.Load() == 0 {
 		t.Fatal("no final report was sent")
+	}
+}
+
+func TestRunSendsRealIP(t *testing.T) {
+	var header atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header.Store(r.Header.Get(subnet.Header))
+	}))
+	defer srv.Close()
+
+	cfg := config.AgentConfig{
+		Address:        strings.TrimPrefix(srv.URL, "http://"),
+		PollInterval:   20 * time.Millisecond,
+		ReportInterval: time.Hour,
+		RateLimit:      1,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfg) }()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	if got, _ := header.Load().(string); got != "127.0.0.1" {
+		t.Fatalf("%s = %q, want 127.0.0.1", subnet.Header, got)
 	}
 }

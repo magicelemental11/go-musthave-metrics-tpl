@@ -56,6 +56,12 @@ func run(ctx context.Context, cfg config.AgentConfig) error {
 		}
 		a.WithPublicKey(pub)
 	}
+	// Without an IP the agent still works with a server that has no trusted subnet.
+	if ip, err := agent.HostIP(cfg.Address); err != nil {
+		log.Printf("X-Real-IP disabled: %v", err)
+	} else {
+		a.WithRealIP(ip)
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)

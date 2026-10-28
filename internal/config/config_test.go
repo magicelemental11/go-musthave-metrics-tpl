@@ -290,3 +290,46 @@ func TestCryptoKey(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadServerTrustedSubnet(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     string
+		args    []string
+		file    string
+		want    string
+		wantErr bool
+	}{
+		{name: "default is empty", want: ""},
+		{name: "flag", args: []string{"-t", "192.168.1.0/24"}, want: "192.168.1.0/24"},
+		{name: "env", env: "10.0.0.0/8", want: "10.0.0.0/8"},
+		{name: "env over flag", env: "10.0.0.0/8", args: []string{"-t", "192.168.1.0/24"}, want: "10.0.0.0/8"},
+		{name: "file", file: `{"trusted_subnet": "172.16.0.0/12"}`, want: "172.16.0.0/12"},
+		{name: "flag over file", file: `{"trusted_subnet": "172.16.0.0/12"}`, args: []string{"-t", "192.168.1.0/24"}, want: "192.168.1.0/24"},
+		{name: "invalid flag", args: []string{"-t", "10.0.0.1"}, wantErr: true},
+		{name: "invalid env", env: "garbage", wantErr: true},
+		{name: "invalid file", file: `{"trusted_subnet": "10.0.0.0/33"}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearEnv(t, serverEnv...)
+			if tt.env != "" {
+				t.Setenv("TRUSTED_SUBNET", tt.env)
+			}
+			args := tt.args
+			if tt.file != "" {
+				args = append([]string{"-c", writeConfig(t, tt.file)}, args...)
+			}
+			cfg, err := LoadServer(args)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("want error, got %+v", cfg)
+				}
+				return
+			}
+			if err != nil || cfg.TrustedSubnet != tt.want {
+				t.Fatalf("got %q, %v; want %q", cfg.TrustedSubnet, err, tt.want)
+			}
+		})
+	}
+}
