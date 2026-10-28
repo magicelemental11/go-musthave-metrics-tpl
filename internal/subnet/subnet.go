@@ -3,11 +3,15 @@ package subnet
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 )
 
 // Header carries the agent's IP address in HTTP requests.
 const Header = "X-Real-IP"
+
+// MetadataKey carries the agent's IP address in gRPC metadata, whose keys are always lower case.
+const MetadataKey = "x-real-ip"
 
 // Checker reports whether an IP address is inside the trusted subnet.
 // A nil Checker trusts every address.
@@ -41,4 +45,13 @@ func (c *Checker) Allowed(ip string) bool {
 		return false
 	}
 	return c.prefix.Contains(addr.Unmap())
+}
+
+// HostOf returns the host part of a "host:port" address, or addr unchanged when it has no port.
+func HostOf(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
 }

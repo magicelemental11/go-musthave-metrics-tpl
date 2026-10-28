@@ -56,8 +56,18 @@ func run(ctx context.Context, cfg config.AgentConfig) error {
 		}
 		a.WithPublicKey(pub)
 	}
+	// A gRPC address switches the transport, so the IP is the one used to reach the gRPC server.
+	serverAddr := cfg.Address
+	if cfg.GRPCAddress != "" {
+		serverAddr = cfg.GRPCAddress
+		conn, err := a.DialGRPC(cfg.GRPCAddress)
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+	}
 	// Without an IP the agent still works with a server that has no trusted subnet.
-	if ip, err := agent.HostIP(cfg.Address); err != nil {
+	if ip, err := agent.HostIP(serverAddr); err != nil {
 		log.Printf("X-Real-IP disabled: %v", err)
 	} else {
 		a.WithRealIP(ip)
@@ -81,6 +91,7 @@ func run(ctx context.Context, cfg config.AgentConfig) error {
 	reportTicker := time.NewTicker(cfg.ReportInterval)
 	defer reportTicker.Stop()
 
+	// Ignored over gRPC.
 	serverURL := "http://" + cfg.Address
 	for {
 		select {

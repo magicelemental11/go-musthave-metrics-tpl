@@ -45,3 +45,18 @@ func TestNewInvalid(t *testing.T) {
 		}
 	}
 }
+
+func TestHostOf(t *testing.T) {
+	tests := map[string]string{
+		"10.0.0.1:5000": "10.0.0.1",
+		"[::1]:5000":    "::1",
+		"10.0.0.1":      "10.0.0.1",
+		"bufconn":       "bufconn",
+		"":              "",
+	}
+	for addr, want := range tests {
+		if got := HostOf(addr); got != want {
+			t.Errorf("HostOf(%q) = %q, want %q", addr, got, want)
+		}
+	}
+}

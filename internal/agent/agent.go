@@ -47,6 +47,12 @@ type Agent struct {
 	pubKey    *rsa.PublicKey
 	realIP    string
 	rateLimit int
+	sender    sender // nil sends over HTTP to the address given to ReportMetrics
+}
+
+// sender delivers one batch to the server. ReportMetrics does not know the transport behind it.
+type sender interface {
+	Send(ctx context.Context, batch []model.Metrics) error
 }
 
 // NewAgent creates an Agent. key signs requests (empty disables signing);
@@ -153,7 +159,8 @@ func (a *Agent) CollectSystemMetrics() error {
 	return nil
 }
 
-// ReportMetrics sends the collected metrics to serverAddr in batches through a bounded worker pool.
+// ReportMetrics sends the collected metrics in batches through a bounded worker pool: over gRPC after
+// DialGRPC, otherwise over HTTP to serverAddr, a base URL such as "http://localhost:8080".
 // The mutex is not held while sending, so collection is not blocked by a slow server.
 func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 	gauges, pollCount := a.snapshot()
@@ -169,19 +176,21 @@ func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 		return
 	}
 
+	s := a.sender
+	if s == nil {
+		s = httpSender{a: a, url: serverAddr + "/updates/"}
+	}
 	chunks := splitBatch(batch, a.rateLimit)
 	runPool(a.rateLimit, len(chunks), func(i int) {
-		var status int
-		err := retry.Do(ctx, a.delays, func() (err error) {
-			status, err = a.sendBatch(ctx, serverAddr+"/updates/", chunks[i])
-			return err
-		}, isTransientNetErr)
+		err := retry.Do(ctx, a.delays, func() error {
+			return s.Send(ctx, chunks[i])
+		}, isTransient)
 		if err != nil {
 			log.Printf("error sending batch of %d metrics: %v", len(chunks[i]), err)
 			return
 		}
-		log.Printf("sent batch of %d metrics → %d", len(chunks[i]), status)
-		if i == 0 && status == http.StatusOK && pollCount > 0 {
+		log.Printf("sent batch of %d metrics", len(chunks[i]))
+		if i == 0 && pollCount > 0 {
 			// Subtract only what was sent: polls made during sending are not lost.
 			a.mu.Lock()
 			a.pollCount -= pollCount
@@ -218,6 +227,10 @@ func runPool(limit, n int, job func(i int)) {
 	wg.Wait()
 }
 
+func isTransient(err error) bool {
+	return isTransientNetErr(err) || isTransientGRPCErr(err)
+}
+
 func isTransientNetErr(err error) bool {
 	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -225,6 +238,24 @@ func isTransientNetErr(err error) bool {
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// httpSender posts a batch as gzipped JSON, signed and encrypted when the agent has the keys.
+type httpSender struct {
+	a   *Agent
+	url string
+}
+
+// Send fails on any status but 200. Such an error is not transient, so it is not retried.
+func (s httpSender) Send(ctx context.Context, batch []model.Metrics) error {
+	status, err := s.a.sendBatch(ctx, s.url, batch)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("server responded %d", status)
+	}
+	return nil
 }
 
 func (a *Agent) sendBatch(ctx context.Context, url string, batch []model.Metrics) (int, error) {

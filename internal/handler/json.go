@@ -70,7 +70,7 @@ func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.publishAudit(r, m.ID)
+	h.publishAudit(r.Context(), clientIP(r), m.ID)
 	writeJSON(w, http.StatusOK, m)
 }
 

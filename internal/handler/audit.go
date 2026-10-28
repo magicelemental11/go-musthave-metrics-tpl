@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"time"
 
@@ -21,14 +20,14 @@ func (h *Handler) WithAudit(p Publisher) *Handler {
 	return h
 }
 
-func (h *Handler) publishAudit(r *http.Request, metrics ...string) {
+func (h *Handler) publishAudit(ctx context.Context, ip string, metrics ...string) {
 	if h.audit == nil {
 		return
 	}
-	h.audit.Publish(context.WithoutCancel(r.Context()), audit.Event{
+	h.audit.Publish(context.WithoutCancel(ctx), audit.Event{
 		TS:        time.Now().Unix(),
 		Metrics:   metrics,
-		IPAddress: clientIP(r),
+		IPAddress: ip,
 	})
 }
 
@@ -38,9 +37,5 @@ func clientIP(r *http.Request) string {
 	if ip := r.Header.Get(subnet.Header); ip != "" {
 		return ip
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return subnet.HostOf(r.RemoteAddr)
 }

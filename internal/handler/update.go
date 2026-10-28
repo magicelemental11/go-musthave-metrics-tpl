@@ -119,6 +119,6 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("received %s %s = %s\n", metricType, metricName, metricValue)
-	h.publishAudit(r, metricName)
+	h.publishAudit(r.Context(), clientIP(r), metricName)
 	w.WriteHeader(http.StatusOK)
 }

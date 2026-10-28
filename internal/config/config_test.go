@@ -333,3 +333,51 @@ func TestLoadServerTrustedSubnet(t *testing.T) {
 		})
 	}
 }
+
+func TestGRPCAddress(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		args []string
+		file string
+		want string
+	}{
+		{name: "default is empty", want: ""},
+		{name: "flag", args: []string{"-grpc-address", "localhost:3200"}, want: "localhost:3200"},
+		{name: "env", env: "env:3200", want: "env:3200"},
+		{name: "env over flag", env: "env:3200", args: []string{"-grpc-address", "flag:3200"}, want: "env:3200"},
+		{name: "file", file: `{"grpc_address": "file:3200"}`, want: "file:3200"},
+		{name: "flag over file", file: `{"grpc_address": "file:3200"}`, args: []string{"-grpc-address", "flag:3200"}, want: "flag:3200"},
+	}
+	loaders := map[string]struct {
+		env  []string
+		load func(args []string) (string, error)
+	}{
+		"server": {serverEnv, func(args []string) (string, error) {
+			cfg, err := LoadServer(args)
+			return cfg.GRPCAddress, err
+		}},
+		"agent": {agentEnv, func(args []string) (string, error) {
+			cfg, err := LoadAgent(args)
+			return cfg.GRPCAddress, err
+		}},
+	}
+	for name, l := range loaders {
+		for _, tt := range tests {
+			t.Run(name+"/"+tt.name, func(t *testing.T) {
+				clearEnv(t, l.env...)
+				if tt.env != "" {
+					t.Setenv("GRPC_ADDRESS", tt.env)
+				}
+				args := tt.args
+				if tt.file != "" {
+					args = append([]string{"-c", writeConfig(t, tt.file)}, args...)
+				}
+				got, err := l.load(args)
+				if err != nil || got != tt.want {
+					t.Fatalf("got %q, %v; want %q", got, err, tt.want)
+				}
+			})
+		}
+	}
+}
