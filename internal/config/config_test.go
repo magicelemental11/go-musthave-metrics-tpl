@@ -31,7 +31,7 @@ func TestLoadServerPriority(t *testing.T) {
 }
 
 func clearServerEnv(t *testing.T) {
-	for _, name := range []string{"ADDRESS", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE", "DATABASE_DSN"} {
+	for _, name := range []string{"ADDRESS", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE", "DATABASE_DSN", "KEY"} {
 		t.Setenv(name, "") // запоминает исходное значение для восстановления
 		os.Unsetenv(name)
 	}
@@ -85,8 +85,9 @@ func TestLoadAgentPriority(t *testing.T) {
 		t.Setenv("ADDRESS", "")
 		t.Setenv("POLL_INTERVAL", "")
 		t.Setenv("REPORT_INTERVAL", "")
+		t.Setenv("KEY", "")
 		cfg, err := LoadAgent(nil)
-		want := AgentConfig{"localhost:8080", 2 * time.Second, 10 * time.Second}
+		want := AgentConfig{Address: "localhost:8080", PollInterval: 2 * time.Second, ReportInterval: 10 * time.Second, RateLimit: 1}
 		if err != nil || cfg != want {
 			t.Fatalf("got %+v, %v", cfg, err)
 		}
@@ -95,8 +96,9 @@ func TestLoadAgentPriority(t *testing.T) {
 		t.Setenv("ADDRESS", "")
 		t.Setenv("POLL_INTERVAL", "")
 		t.Setenv("REPORT_INTERVAL", "")
+		t.Setenv("KEY", "")
 		cfg, err := LoadAgent([]string{"-a", "h:1", "-p", "3", "-r", "5"})
-		want := AgentConfig{"h:1", 3 * time.Second, 5 * time.Second}
+		want := AgentConfig{Address: "h:1", PollInterval: 3 * time.Second, ReportInterval: 5 * time.Second, RateLimit: 1}
 		if err != nil || cfg != want {
 			t.Fatalf("got %+v, %v", cfg, err)
 		}
@@ -106,7 +108,7 @@ func TestLoadAgentPriority(t *testing.T) {
 		t.Setenv("POLL_INTERVAL", "7")
 		t.Setenv("REPORT_INTERVAL", "20")
 		cfg, err := LoadAgent([]string{"-a", "h:1", "-p", "3", "-r", "5"})
-		want := AgentConfig{"h:2", 7 * time.Second, 20 * time.Second}
+		want := AgentConfig{Address: "h:2", PollInterval: 7 * time.Second, ReportInterval: 20 * time.Second, RateLimit: 1}
 		if err != nil || cfg != want {
 			t.Fatalf("got %+v, %v", cfg, err)
 		}
@@ -130,6 +132,7 @@ func TestLoadAgentInvalid(t *testing.T) {
 			t.Setenv("ADDRESS", "")
 			t.Setenv("POLL_INTERVAL", "")
 			t.Setenv("REPORT_INTERVAL", "")
+			t.Setenv("KEY", "")
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
@@ -155,4 +158,56 @@ func TestLoadServerDatabaseDSN(t *testing.T) {
 	if err != nil || cfg.DatabaseDSN != "env-dsn" {
 		t.Fatalf("env: got %+v, %v", cfg, err)
 	}
+}
+
+func TestLoadKey(t *testing.T) {
+	clearServerEnv(t)
+	t.Run("flag", func(t *testing.T) {
+		s, err := LoadServer([]string{"-k", "flagkey"})
+		if err != nil || s.Key != "flagkey" {
+			t.Fatalf("server: %+v, %v", s, err)
+		}
+		a, err := LoadAgent([]string{"-k", "flagkey"})
+		if err != nil || a.Key != "flagkey" {
+			t.Fatalf("agent: %+v, %v", a, err)
+		}
+	})
+	t.Run("env over flag", func(t *testing.T) {
+		t.Setenv("KEY", "envkey")
+		s, err := LoadServer([]string{"-k", "flagkey"})
+		if err != nil || s.Key != "envkey" {
+			t.Fatalf("server: %+v, %v", s, err)
+		}
+		a, err := LoadAgent([]string{"-k", "flagkey"})
+		if err != nil || a.Key != "envkey" {
+			t.Fatalf("agent: %+v, %v", a, err)
+		}
+	})
+}
+
+func TestLoadAgentRateLimit(t *testing.T) {
+	t.Run("flag", func(t *testing.T) {
+		t.Setenv("RATE_LIMIT", "")
+		cfg, err := LoadAgent([]string{"-l", "4"})
+		if err != nil || cfg.RateLimit != 4 {
+			t.Fatalf("got %+v, %v", cfg, err)
+		}
+	})
+	t.Run("env over flag", func(t *testing.T) {
+		t.Setenv("RATE_LIMIT", "7")
+		cfg, err := LoadAgent([]string{"-l", "4"})
+		if err != nil || cfg.RateLimit != 7 {
+			t.Fatalf("got %+v, %v", cfg, err)
+		}
+	})
+	t.Run("invalid", func(t *testing.T) {
+		t.Setenv("RATE_LIMIT", "")
+		if _, err := LoadAgent([]string{"-l", "0"}); err == nil {
+			t.Fatal("expected error for 0")
+		}
+		t.Setenv("RATE_LIMIT", "abc")
+		if _, err := LoadAgent(nil); err == nil {
+			t.Fatal("expected error for abc")
+		}
+	})
 }
