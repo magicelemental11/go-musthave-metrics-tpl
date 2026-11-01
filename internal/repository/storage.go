@@ -1,3 +1,4 @@
+// Package repository contains metric storages: in-memory, file-backed and PostgreSQL.
 package repository
 
 import (
@@ -7,8 +8,12 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/model"
 )
 
+// ErrNotFound is returned by getters when the metric does not exist.
 var ErrNotFound = errors.New("metric not found")
 
+// Storage is the metric store used by the handlers.
+// UpdateCounter adds to the stored value and returns the new total;
+// UpdateGauge replaces the value.
 type Storage interface {
 	GetGauge(ctx context.Context, name string) (float64, error)
 	GetCounter(ctx context.Context, name string) (int64, error)

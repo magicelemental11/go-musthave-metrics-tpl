@@ -26,7 +26,9 @@ func (w *signWriter) Write(b []byte) (int, error) {
 
 const maxSignedBody = 1 << 20
 
-// Sign ставится после Gzip, поэтому проверяет и подписывает несжатые данные.
+// Sign verifies the HashSHA256 header of a request body and signs the response body.
+// It runs after Gzip, so it checks and signs uncompressed data.
+// A request with a wrong signature gets 400; a request without the header is not checked.
 func Sign(key string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

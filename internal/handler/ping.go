@@ -8,12 +8,12 @@ import (
 
 const pingTimeout = 3 * time.Second
 
-// Pinger проверяет доступность БД; его реализует *sql.DB.
+// Pinger checks database availability; *sql.DB implements it.
 type Pinger interface {
 	PingContext(ctx context.Context) error
 }
 
-// Ping отвечает 200, если БД доступна, иначе 500.
+// Ping responds 200 if the database is reachable and 500 otherwise.
 func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {
 	if h.pinger == nil {
 		http.Error(w, "database is not configured", http.StatusInternalServerError)
