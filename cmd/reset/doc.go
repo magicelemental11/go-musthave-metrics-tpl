@@ -4,8 +4,12 @@
 //
 // Fields are reset as follows: numbers, strings and bools become zero; slices
 // are truncated to length zero and maps are cleared, keeping their storage;
-// non-nil pointers are dereferenced and reset in place; values and pointers
-// whose type has a Reset method get it called; arrays and structs without
-// Reset are replaced by their zero literal; interfaces, channels and funcs
-// become nil, and so does a pointer to the struct being generated.
+// non-nil pointers, including named pointer types such as type IntRef *int,
+// are dereferenced and reset in place; values and pointers whose type has a
+// Reset method get it called; arrays and structs without Reset are replaced by
+// their zero literal; interfaces, channels and funcs become nil, and so does a
+// pointer to the struct being generated.
+//
+// reset.gen.go is written to the directory of the package's Go files. A package
+// whose files are spread over several directories is reported as an error.
 package main

@@ -114,7 +114,10 @@ func generate(dir string, patterns ...string) (*output, error) {
 
 	out := &output{files: make(map[string][]byte)}
 	for _, pkg := range pkgs {
-		pkgDir := packageDir(pkg)
+		pkgDir, err := packageDir(pkg)
+		if err != nil {
+			return nil, err
+		}
 		if pkgDir == "" {
 			continue
 		}
@@ -135,11 +138,19 @@ func generate(dir string, patterns ...string) (*output, error) {
 	return out, nil
 }
 
-func packageDir(pkg *packages.Package) string {
+// packageDir returns the directory holding all Go files of pkg. Files spread over
+// several directories are an error: there is no single right place for reset.gen.go.
+func packageDir(pkg *packages.Package) (string, error) {
 	if len(pkg.GoFiles) == 0 {
-		return ""
+		return "", nil
 	}
-	return filepath.Dir(pkg.GoFiles[0])
+	dir := filepath.Dir(pkg.GoFiles[0])
+	for _, f := range pkg.GoFiles[1:] {
+		if d := filepath.Dir(f); d != dir {
+			return "", fmt.Errorf("%s: Go files are in several directories: %s and %s", pkg.PkgPath, dir, d)
+		}
+	}
+	return dir, nil
 }
 
 func isGenerated(path string) bool {
@@ -291,7 +302,16 @@ func hasResetMethod(ms *types.MethodSet) bool {
 }
 
 func callUnlessNil(target string) string {
-	return fmt.Sprintf("if %s != nil {\n%s.Reset()\n}\n", target, target)
+	return fmt.Sprintf("if %s != nil {\n%s.Reset()\n}\n", target, operand(target))
+}
+
+// operand wraps a dereference in parentheses so that a selector or slice
+// expression applies to the pointed-to value: (*p).Reset(), not *(p.Reset()).
+func operand(target string) string {
+	if strings.HasPrefix(target, "*") {
+		return "(" + target + ")"
+	}
+	return target
 }
 
 func (r *renderer) resetStmt(target string, t types.Type) string {
@@ -303,19 +323,18 @@ func (r *renderer) resetStmt(target string, t types.Type) string {
 		return target + " = nil\n"
 	}
 	if ptr, ok := under.(*types.Pointer); ok {
-		if _, named := t.(*types.Named); named {
-			return target + " = nil\n"
-		}
 		if r.isCurrent(ptr.Elem()) {
 			return target + " = nil\n"
 		}
-		if r.hasReset(ptr.Elem()) {
+		// A named pointer type has no methods of its element, so it is
+		// dereferenced explicitly below: (*p).Reset().
+		if _, named := t.(*types.Named); !named && r.hasReset(ptr.Elem()) {
 			return callUnlessNil(target)
 		}
 		return fmt.Sprintf("if %s != nil {\n%s}\n", target, r.resetStmt("*"+target, ptr.Elem()))
 	}
 	if r.hasReset(t) {
-		return target + ".Reset()\n"
+		return operand(target) + ".Reset()\n"
 	}
 
 	switch u := under.(type) {
@@ -329,7 +348,7 @@ func (r *renderer) resetStmt(target string, t types.Type) string {
 			return target + " = 0\n"
 		}
 	case *types.Slice:
-		return fmt.Sprintf("%s = %s[:0]\n", target, target)
+		return fmt.Sprintf("%s = %s[:0]\n", target, operand(target))
 	case *types.Map:
 		return fmt.Sprintf("clear(%s)\n", target)
 	case *types.Array, *types.Struct:

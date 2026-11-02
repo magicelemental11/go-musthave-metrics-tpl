@@ -3,7 +3,7 @@ package sample
 import "testing"
 
 func filled() *Buffer {
-	n := int64(7)
+	n, total := int64(7), int64(9)
 	return &Buffer{
 		Name:    "buf",
 		Size:    3,
@@ -12,6 +12,8 @@ func filled() *Buffer {
 		Data:    append(make([]byte, 0, 64), 1, 2, 3),
 		Index:   map[string]int{"a": 1},
 		Counter: &n,
+		Total:   &total,
+		Last:    &Child{Hits: 4, Tags: []string{"z"}},
 		Child:   Child{Hits: 2, Tags: append(make([]string, 0, 8), "x")},
 		Next:    &Child{Hits: 5, Tags: []string{"y"}},
 		Fixed:   [3]int{1, 2, 3},
@@ -21,7 +23,7 @@ func filled() *Buffer {
 
 func TestReset(t *testing.T) {
 	b := filled()
-	counter, next := b.Counter, b.Next
+	counter, next, total, last := b.Counter, b.Next, b.Total, b.Last
 	b.Reset()
 
 	if b.Name != "" || b.Size != 0 || b.Ratio != 0 || b.Ready {
@@ -35,6 +37,12 @@ func TestReset(t *testing.T) {
 	}
 	if b.Counter != counter || *b.Counter != 0 {
 		t.Errorf("Counter pointer must be kept and zeroed, got %v", *b.Counter)
+	}
+	if b.Total != total || *b.Total != 0 {
+		t.Errorf("Total pointer must be kept and zeroed, got %v", *b.Total)
+	}
+	if b.Last != last || last.Hits != 0 || len(last.Tags) != 0 {
+		t.Errorf("Last not reset: %+v", last)
 	}
 	if b.Child.Hits != 0 || len(b.Child.Tags) != 0 || cap(b.Child.Tags) != 8 {
 		t.Errorf("Child not reset: %+v", b.Child)
@@ -53,7 +61,7 @@ func TestReset(t *testing.T) {
 func TestResetNilPointers(t *testing.T) {
 	b := &Buffer{Name: "x"}
 	b.Reset()
-	if b.Name != "" || b.Counter != nil || b.Next != nil {
+	if b.Name != "" || b.Counter != nil || b.Next != nil || b.Total != nil || b.Last != nil {
 		t.Errorf("unexpected state: %+v", b)
 	}
 }

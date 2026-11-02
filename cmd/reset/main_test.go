@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -51,5 +53,29 @@ func TestGenerateRemovesStaleFile(t *testing.T) {
 	}
 	if len(out.stale) != 1 || out.stale[0] != want {
 		t.Errorf("stale = %v, want [%s]", out.stale, want)
+	}
+}
+
+func TestPackageDir(t *testing.T) {
+	tests := []struct {
+		name    string
+		files   []string
+		want    string
+		wantErr bool
+	}{
+		{name: "no files", files: nil, want: ""},
+		{name: "one directory", files: []string{"/m/a/x.go", "/m/a/y.go"}, want: "/m/a"},
+		{name: "several directories", files: []string{"/m/a/x.go", "/m/b/y.go"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := packageDir(&packages.Package{PkgPath: "m/a", GoFiles: tt.files})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("dir = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

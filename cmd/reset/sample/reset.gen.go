@@ -16,6 +16,12 @@ func (b *Buffer) Reset() {
 	if b.Counter != nil {
 		*b.Counter = 0
 	}
+	if b.Total != nil {
+		*b.Total = 0
+	}
+	if b.Last != nil {
+		(*b.Last).Reset()
+	}
 	b.Child.Reset()
 	if b.Next != nil {
 		b.Next.Reset()

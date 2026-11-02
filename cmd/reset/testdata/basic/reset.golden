@@ -30,6 +30,7 @@ func (n *Node) Reset() {
 	}
 	n.Val = 0
 	n.Next = nil
+	n.Prev = nil
 }
 
 // Reset restores Sample to its zero state, keeping slice and map storage.
@@ -62,6 +63,20 @@ func (s *Sample) Reset() {
 	s.Leaf.Reset()
 	if s.LeafPtr != nil {
 		s.LeafPtr.Reset()
+	}
+	if s.LeafPP != nil {
+		if *s.LeafPP != nil {
+			(*s.LeafPP).Reset()
+		}
+	}
+	if s.ItemsP != nil {
+		*s.ItemsP = (*s.ItemsP)[:0]
+	}
+	if s.IntRef != nil {
+		*s.IntRef = 0
+	}
+	if s.LeafRef != nil {
+		(*s.LeafRef).Reset()
 	}
 	s.Plain = Plain{}
 	s.Inner = Inner{}

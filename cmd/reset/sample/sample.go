@@ -10,6 +10,12 @@ type Child struct {
 	Tags []string
 }
 
+// CounterRef is a named pointer type: Reset must zero the value it points to.
+type CounterRef *int64
+
+// ChildRef is a named pointer to a struct with a Reset method.
+type ChildRef *Child
+
 // generate:reset
 type Buffer struct {
 	Name    string
@@ -19,6 +25,8 @@ type Buffer struct {
 	Data    []byte
 	Index   map[string]int
 	Counter *int64
+	Total   CounterRef
+	Last    ChildRef
 	Child   Child
 	Next    *Child
 	Fixed   [3]int

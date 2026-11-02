@@ -20,6 +20,12 @@ type Plain struct {
 
 type Celsius float64
 
+type IntRef *int
+
+type LeafRef *Leaf
+
+type NodeRef *Node
+
 type Runner interface {
 	Run()
 	Reset()
@@ -45,6 +51,10 @@ type Sample struct {
 	PtrPtr  **int
 	Leaf    Leaf
 	LeafPtr *Leaf
+	LeafPP  **Leaf
+	ItemsP  *[]string
+	IntRef  IntRef
+	LeafRef LeafRef
 	Plain   Plain
 	Inner   Inner
 	Fixed   [4]byte
@@ -75,4 +85,5 @@ type NotAStruct int
 type Node struct {
 	Val  int
 	Next *Node
+	Prev NodeRef
 }
