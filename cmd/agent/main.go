@@ -10,10 +10,19 @@ import (
 	"time"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/agent"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/buildinfo"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 )
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
 func main() {
+	buildinfo.Fprint(os.Stdout, buildVersion, buildDate, buildCommit)
+
 	cfg, err := config.LoadAgent(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)

@@ -18,13 +18,22 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/audit"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/buildinfo"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
 )
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
 func main() {
+	buildinfo.Fprint(os.Stdout, buildVersion, buildDate, buildCommit)
+
 	cfg, err := config.LoadServer(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
@@ -48,12 +57,13 @@ func main() {
 	switch backendFor(cfg) {
 	case backendPostgres:
 		// sql.Open does not connect to the database, Migrate will check the connection.
-		db, err := sql.Open("pgx", cfg.DatabaseDSN)
+		var db *sql.DB
+		db, err = sql.Open("pgx", cfg.DatabaseDSN)
 		if err != nil {
 			log.Fatal(err)
 		}
 		defer db.Close()
-		if err := repository.Migrate(db); err != nil {
+		if err = repository.Migrate(db); err != nil {
 			log.Fatalf("migrations failed: %v", err)
 		}
 		pinger = db
@@ -64,7 +74,7 @@ func main() {
 		storage = fileStorage
 
 		if cfg.Restore {
-			if err := fileStorage.Restore(); err != nil {
+			if err = fileStorage.Restore(); err != nil {
 				log.Printf("restore failed: %v", err)
 			}
 		}
