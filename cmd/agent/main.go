@@ -95,7 +95,10 @@ func report(ctx context.Context, a *agent.Agent, serverURL string) {
 	a.ReportMetrics(sendCtx, serverURL)
 }
 
+// poll collects once right away, so a shutdown before the first tick still has data to report,
+// then collects on every tick until ctx is cancelled.
 func poll(ctx context.Context, interval time.Duration, collect func()) {
+	collect()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,12 +115,19 @@ func TestRunFinishesInFlightRequest(t *testing.T) {
 	cfg := config.ServerConfig{Address: freeAddr(t)}
 	cancel, done := startServer(t, cfg)
 
+	// With Expect: 100-continue the server answers 100 only when the handler starts reading the body,
+	// so Got100Continue tells the test that the request is in flight on the server.
+	inFlight := make(chan struct{})
+	trace := &httptrace.ClientTrace{Got100Continue: func() { close(inFlight) }}
 	pr, pw := io.Pipe()
-	req, err := http.NewRequest(http.MethodPost, "http://"+cfg.Address+"/update", pr)
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(context.Background(), trace),
+		http.MethodPost, "http://"+cfg.Address+"/update", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Expect", "100-continue")
+	client := &http.Client{Transport: &http.Transport{ExpectContinueTimeout: 5 * time.Second}}
 
 	type result struct {
 		status int
@@ -127,7 +135,7 @@ func TestRunFinishesInFlightRequest(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			resCh <- result{err: err}
 			return
@@ -136,10 +144,11 @@ func TestRunFinishesInFlightRequest(t *testing.T) {
 		resCh <- result{status: resp.StatusCode}
 	}()
 
-	if _, err := pw.Write([]byte(`{"id":"slow","type":"gauge",`)); err != nil {
-		t.Fatal(err)
+	select {
+	case <-inFlight:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request did not reach the handler")
 	}
-	time.Sleep(100 * time.Millisecond)
 	cancel()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -153,7 +162,7 @@ func TestRunFinishesInFlightRequest(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, err := pw.Write([]byte(`"value":1}`)); err != nil {
+	if _, err := pw.Write([]byte(`{"id":"slow","type":"gauge","value":1}`)); err != nil {
 		t.Fatal(err)
 	}
 	pw.Close()

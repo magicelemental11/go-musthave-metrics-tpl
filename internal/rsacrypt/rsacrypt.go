@@ -36,6 +36,8 @@ func Encrypt(pub *rsa.PublicKey, plaintext []byte) ([]byte, error) {
 	return gcm.Seal(out, nonce, plaintext, nil), nil
 }
 
+// Decrypt reverses Encrypt: it unwraps the AES key with priv and opens the AES-GCM ciphertext.
+// It fails on data that is too short, was encrypted for another key or was modified.
 func Decrypt(priv *rsa.PrivateKey, data []byte) ([]byte, error) {
 	if len(data) < priv.Size() {
 		return nil, errors.New("ciphertext too short")
@@ -67,6 +69,7 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
+// Header marks an encrypted request body; the server decrypts only requests where it equals HeaderValue.
 const (
 	Header      = "X-Encrypted"
 	HeaderValue = "rsa"

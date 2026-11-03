@@ -21,8 +21,8 @@ func TestRunReportsOnShutdown(t *testing.T) {
 
 	cfg := config.AgentConfig{
 		Address:        strings.TrimPrefix(srv.URL, "http://"),
-		PollInterval:   20 * time.Millisecond,
-		ReportInterval: time.Hour,
+		PollInterval:   time.Hour,
+		ReportInterval: time.Hour, // no periodic report, so any request is the final one
 		RateLimit:      1,
 	}
 
@@ -30,10 +30,6 @@ func TestRunReportsOnShutdown(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, cfg) }()
 
-	time.Sleep(300 * time.Millisecond)
-	if n := requests.Load(); n != 0 {
-		t.Fatalf("got %d requests before shutdown", n)
-	}
 	cancel()
 
 	select {

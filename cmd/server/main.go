@@ -135,7 +135,9 @@ func run(ctx context.Context, cfg config.ServerConfig) error {
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logging(logger))
-	r.Use(middleware.Decrypt(privKey))
+	if privKey != nil {
+		r.Use(middleware.Decrypt(privKey))
+	}
 	r.Use(middleware.Gzip)
 	if cfg.Key != "" {
 		r.Use(middleware.Sign(cfg.Key))

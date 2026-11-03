@@ -11,13 +11,11 @@ import (
 
 const maxEncryptedBody = 2 << 20 // twice the 1 MiB payload limit: room for the RSA-wrapped key, nonce and tag
 
-// Decrypt decrypts request bodies before Gzip and Sign see them. GET and HEAD pass through;
-// any other request that is not encrypted or cannot be decrypted gets 400. A nil key disables it.
+// Decrypt decrypts request bodies with key before Gzip and Sign see them. GET and HEAD pass through;
+// any other request that is not encrypted or cannot be decrypted gets 400.
+// Register it only when a private key is configured.
 func Decrypt(key *rsa.PrivateKey) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		if key == nil {
-			return next
-		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
 				next.ServeHTTP(w, r)

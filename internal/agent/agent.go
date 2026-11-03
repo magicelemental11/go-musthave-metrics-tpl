@@ -58,6 +58,7 @@ func NewAgent(key string, rateLimit int) *Agent {
 	}
 }
 
+// WithPublicKey makes the agent encrypt request bodies with pub. A nil key leaves bodies unencrypted.
 func (a *Agent) WithPublicKey(pub *rsa.PublicKey) *Agent {
 	a.pubKey = pub
 	return a

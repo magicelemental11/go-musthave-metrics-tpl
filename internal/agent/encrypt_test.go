@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -25,12 +26,18 @@ func TestReportMetricsEncrypted(t *testing.T) {
 	storage := repository.NewMemStorage()
 	h := handler.NewHandler(storage, nil)
 
-	var wire []byte
+	// wire is written by the server goroutine and read by the test, so it is guarded by mu.
+	var (
+		mu   sync.Mutex
+		wire []byte
+	)
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			body, _ := io.ReadAll(req.Body)
-			wire = body
+			mu.Lock()
+			wire = append(wire, body...)
+			mu.Unlock()
 			req.Body = io.NopCloser(bytes.NewReader(body))
 			next.ServeHTTP(w, req)
 		})
@@ -51,6 +58,11 @@ func TestReportMetricsEncrypted(t *testing.T) {
 	}
 	if got, err := storage.GetGauge(context.Background(), "Alloc"); err != nil || got == 0 {
 		t.Fatalf("Alloc = %v, %v", got, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(wire) == 0 {
+		t.Fatal("server received no body")
 	}
 	if bytes.Contains(wire, []byte("PollCount")) {
 		t.Fatal("request body is not encrypted")

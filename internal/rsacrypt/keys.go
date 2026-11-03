@@ -9,6 +9,7 @@ import (
 	"os"
 )
 
+// LoadPublicKey reads a PEM-encoded PKIX RSA public key from path.
 func LoadPublicKey(path string) (*rsa.PublicKey, error) {
 	der, err := readPEM(path)
 	if err != nil {

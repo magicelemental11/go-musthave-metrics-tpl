@@ -27,3 +27,6 @@ vendor/
 
 # Metrics storage file
 metrics-db.json
+
+# RSA keys from cmd/keygen
+*.pem

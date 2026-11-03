@@ -37,7 +37,6 @@ func TestDecrypt(t *testing.T) {
 		{"valid", key, string(enc), true, http.StatusOK, `{"id":"x"}`},
 		{"garbage", key, "garbage", true, http.StatusBadRequest, ""},
 		{"missing header with key", key, `{"id":"x"}`, false, http.StatusBadRequest, ""},
-		{"no key passes through", nil, `{"id":"x"}`, false, http.StatusOK, `{"id":"x"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
