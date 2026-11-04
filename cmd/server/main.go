@@ -11,13 +11,13 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/audit"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/buildinfo"
@@ -58,12 +58,13 @@ func main() {
 // run serves until ctx is cancelled. Shutdown order: stop accepting and drain HTTP requests,
 // stop periodic saving, save once more, then close audit and the database (deferred).
 // After a Shutdown timeout the remaining connections are closed before saving.
+// A failure of a background goroutine (periodic saving) shuts the server down and is returned.
 func run(ctx context.Context, cfg config.ServerConfig) error {
-	var wg sync.WaitGroup
 	ctx, cancel := context.WithCancel(ctx)
+	g, ctx := errgroup.WithContext(ctx)
 	defer func() {
 		cancel()
-		wg.Wait()
+		_ = g.Wait()
 	}()
 
 	var privKey *rsa.PrivateKey
@@ -109,11 +110,9 @@ func run(ctx context.Context, cfg config.ServerConfig) error {
 			}
 		}
 		if cfg.StoreInterval > 0 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				savePeriodically(ctx, fileStorage, cfg.StoreInterval)
-			}()
+			g.Go(func() error {
+				return savePeriodically(ctx, fileStorage, cfg.StoreInterval)
+			})
 		}
 	default:
 		storage = repository.NewMemStorage()
@@ -175,11 +174,11 @@ func run(ctx context.Context, cfg config.ServerConfig) error {
 	go func() { errCh <- srv.ListenAndServe() }()
 	log.Println("Server address:", cfg.Address)
 
-	var runErr error
+	var serveErr error
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
-			runErr = err
+			serveErr = err
 		}
 	case <-ctx.Done():
 		log.Println("shutting down")
@@ -194,15 +193,15 @@ func run(ctx context.Context, cfg config.ServerConfig) error {
 	}
 
 	cancel()
-	wg.Wait() // background saving must finish before the final save
+	groupErr := g.Wait() // background saving must finish before the final save
 
 	// A server that never started has nothing to save and the file may hold data that was not restored.
-	if fileStorage != nil && runErr == nil {
+	if fileStorage != nil && serveErr == nil {
 		if err := fileStorage.Save(); err != nil {
 			log.Printf("final save failed: %v", err)
 		}
 	}
-	return runErr
+	return errors.Join(serveErr, groupErr)
 }
 
 const shutdownTimeout = 5 * time.Second
@@ -270,16 +269,18 @@ func buildAudit(cfg config.ServerConfig) (*audit.Subject, error) {
 	return subject, nil
 }
 
-func savePeriodically(ctx context.Context, s *repository.FileStorage, interval time.Duration) {
+// savePeriodically saves s on every tick until ctx is cancelled. A failed save is returned,
+// so the errgroup stops the server instead of silently losing data.
+func savePeriodically(ctx context.Context, s *repository.FileStorage, interval time.Duration) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 			if err := s.Save(); err != nil {
-				log.Printf("periodic save failed: %v", err)
+				return fmt.Errorf("periodic save: %w", err)
 			}
 		}
 	}

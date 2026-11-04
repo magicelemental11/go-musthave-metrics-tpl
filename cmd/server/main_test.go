@@ -197,3 +197,26 @@ func TestRunKeepsFileWhenServerFailsToStart(t *testing.T) {
 		t.Fatalf("file changed: %q, %v", data, err)
 	}
 }
+
+func TestRunStopsWhenPeriodicSaveFails(t *testing.T) {
+	// A regular file in place of the parent directory makes every save fail.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.ServerConfig{
+		Address:         freeAddr(t),
+		FileStoragePath: filepath.Join(blocker, "metrics.json"),
+		StoreInterval:   10 * time.Millisecond,
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(context.Background(), cfg) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "periodic save") {
+			t.Fatalf("got %v, want periodic save error", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not stop after a failed periodic save")
+	}
+}

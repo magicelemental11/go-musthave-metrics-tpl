@@ -318,3 +318,26 @@ func TestConfigFileErrorMentionsPath(t *testing.T) {
 		}
 	}
 }
+
+// The example configs must list every field with its default, so loading one equals loading nothing.
+func TestExampleConfigsMatchDefaults(t *testing.T) {
+	clearEnv(t, serverEnv...)
+	defaults, err := LoadServer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromExample, err := LoadServer([]string{"-c", "../../cmd/server/config.example.json"})
+	if err != nil || fromExample != defaults {
+		t.Errorf("server example: got %+v, %v; want %+v", fromExample, err, defaults)
+	}
+
+	clearEnv(t, agentEnv...)
+	agentDefaults, err := LoadAgent(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentExample, err := LoadAgent([]string{"-c", "../../cmd/agent/config.example.json"})
+	if err != nil || agentExample != agentDefaults {
+		t.Errorf("agent example: got %+v, %v; want %+v", agentExample, err, agentDefaults)
+	}
+}

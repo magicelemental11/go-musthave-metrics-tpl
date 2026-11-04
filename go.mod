@@ -11,6 +11,7 @@ require (
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/timakin/bodyclose v0.0.0-20260923065923-98ded9ab4ef2
 	go.uber.org/zap v1.28.0
+	golang.org/x/sync v0.24.0
 	golang.org/x/tools v0.52.0
 	honnef.co/go/tools v0.8.2
 )
@@ -31,7 +32,6 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
 	golang.org/x/mod v0.42.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/tools/go/packages/packagestest v0.1.1-deprecated // indirect

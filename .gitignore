@@ -30,3 +30,6 @@ metrics-db.json
 
 # RSA keys from cmd/keygen
 *.pem
+
+# Local config files; only config.example.json is committed
+config.json

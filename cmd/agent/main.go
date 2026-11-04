@@ -5,9 +5,10 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/agent"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/buildinfo"
@@ -57,20 +58,20 @@ func run(ctx context.Context, cfg config.AgentConfig) error {
 		a.WithPublicKey(pub)
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		poll(ctx, cfg.PollInterval, a.CollectMetrics)
-	}()
-	go func() {
-		defer wg.Done()
-		poll(ctx, cfg.PollInterval, func() {
+	// A failed system metrics read is not critical: it is logged and the next tick tries again.
+	g, collectCtx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		poll(collectCtx, cfg.PollInterval, a.CollectMetrics)
+		return nil
+	})
+	g.Go(func() error {
+		poll(collectCtx, cfg.PollInterval, func() {
 			if err := a.CollectSystemMetrics(); err != nil {
 				log.Printf("collect system metrics: %v", err)
 			}
 		})
-	}()
+		return nil
+	})
 
 	reportTicker := time.NewTicker(cfg.ReportInterval)
 	defer reportTicker.Stop()
@@ -78,10 +79,10 @@ func run(ctx context.Context, cfg config.AgentConfig) error {
 	serverURL := "http://" + cfg.Address
 	for {
 		select {
-		case <-ctx.Done():
-			wg.Wait()
+		case <-collectCtx.Done():
+			err := g.Wait()
 			report(ctx, a, serverURL)
-			return nil
+			return err
 		case <-reportTicker.C:
 			report(ctx, a, serverURL)
 		}
