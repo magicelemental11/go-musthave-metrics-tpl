@@ -2,20 +2,22 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/pprof"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/audit"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/buildinfo"
@@ -23,6 +25,7 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/handler"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/middleware"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/repository"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/rsacrypt"
 )
 
 var (
@@ -39,16 +42,44 @@ func main() {
 		log.Fatal(err)
 	}
 
-	logger, err := zap.NewProduction()
-	if err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	defer stop()
+	// After the first signal the default behaviour is restored, so a second one kills a hung shutdown.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+
+	if err := run(ctx, cfg); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// run serves until ctx is cancelled. Shutdown order: stop accepting and drain HTTP requests,
+// stop periodic saving, save once more, then close audit and the database (deferred).
+// After a Shutdown timeout the remaining connections are closed before saving.
+// A failure of a background goroutine (periodic saving) shuts the server down and is returned.
+func run(ctx context.Context, cfg config.ServerConfig) error {
+	ctx, cancel := context.WithCancel(ctx)
+	g, ctx := errgroup.WithContext(ctx)
+	defer func() {
+		cancel()
+		_ = g.Wait()
+	}()
+
+	var privKey *rsa.PrivateKey
+	if cfg.CryptoKey != "" {
+		var err error
+		if privKey, err = rsacrypt.LoadPrivateKey(cfg.CryptoKey); err != nil {
+			return err
+		}
+	}
+
+	logger, err := zap.NewProduction()
+	if err != nil {
+		return err
+	}
 	defer logger.Sync()
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	var wg sync.WaitGroup
 
 	var pinger handler.Pinger
 	var storage repository.Storage
@@ -60,11 +91,11 @@ func main() {
 		var db *sql.DB
 		db, err = sql.Open("pgx", cfg.DatabaseDSN)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		defer db.Close()
 		if err = repository.Migrate(db); err != nil {
-			log.Fatalf("migrations failed: %v", err)
+			return fmt.Errorf("migrations failed: %w", err)
 		}
 		pinger = db
 		storage = repository.NewPgStorage(db)
@@ -79,11 +110,9 @@ func main() {
 			}
 		}
 		if cfg.StoreInterval > 0 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				savePeriodically(ctx, fileStorage, cfg.StoreInterval)
-			}()
+			g.Go(func() error {
+				return savePeriodically(ctx, fileStorage, cfg.StoreInterval)
+			})
 		}
 	default:
 		storage = repository.NewMemStorage()
@@ -92,7 +121,7 @@ func main() {
 	h := handler.NewHandler(storage, pinger)
 	subject, err := buildAudit(cfg)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if subject != nil {
 		defer func() {
@@ -105,6 +134,9 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logging(logger))
+	if privKey != nil {
+		r.Use(middleware.Decrypt(privKey))
+	}
 	r.Use(middleware.Gzip)
 	if cfg.Key != "" {
 		r.Use(middleware.Sign(cfg.Key))
@@ -142,29 +174,37 @@ func main() {
 	go func() { errCh <- srv.ListenAndServe() }()
 	log.Println("Server address:", cfg.Address)
 
+	var serveErr error
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
+			serveErr = err
 		}
 	case <-ctx.Done():
 		log.Println("shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancelShutdown()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("shutdown error: %v", err)
+			if err := srv.Close(); err != nil {
+				log.Printf("close server: %v", err)
+			}
 		}
 	}
 
-	stop()
-	wg.Wait() // background saving must finish before the final save
+	cancel()
+	groupErr := g.Wait() // background saving must finish before the final save
 
-	if fileStorage != nil {
+	// A server that never started has nothing to save and the file may hold data that was not restored.
+	if fileStorage != nil && serveErr == nil {
 		if err := fileStorage.Save(); err != nil {
 			log.Printf("final save failed: %v", err)
 		}
 	}
+	return errors.Join(serveErr, groupErr)
 }
+
+const shutdownTimeout = 5 * time.Second
 
 const (
 	backendPostgres = "postgres"
@@ -229,16 +269,18 @@ func buildAudit(cfg config.ServerConfig) (*audit.Subject, error) {
 	return subject, nil
 }
 
-func savePeriodically(ctx context.Context, s *repository.FileStorage, interval time.Duration) {
+// savePeriodically saves s on every tick until ctx is cancelled. A failed save is returned,
+// so the errgroup stops the server instead of silently losing data.
+func savePeriodically(ctx context.Context, s *repository.FileStorage, interval time.Duration) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 			if err := s.Save(); err != nil {
-				log.Printf("periodic save failed: %v", err)
+				return fmt.Errorf("periodic save: %w", err)
 			}
 		}
 	}

@@ -1,7 +1,16 @@
 package main
 
 import (
+	"context"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptrace"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/config"
 )
@@ -23,5 +32,191 @@ func TestBackendFor(t *testing.T) {
 				t.Fatalf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().String()
+}
+
+func startServer(t *testing.T, cfg config.ServerConfig) (cancel context.CancelFunc, done <-chan error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- run(ctx, cfg) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		conn, err := net.Dial("tcp", cfg.Address)
+		if err == nil {
+			conn.Close()
+			return cancel, errCh
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("server did not start: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func waitRun(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not return")
+	}
+}
+
+func TestRunSavesOnShutdown(t *testing.T) {
+	cfg := config.ServerConfig{
+		Address:         freeAddr(t),
+		StoreInterval:   time.Hour,
+		FileStoragePath: filepath.Join(t.TempDir(), "metrics.json"),
+	}
+	cancel, done := startServer(t, cfg)
+
+	resp, err := http.Post("http://"+cfg.Address+"/update/gauge/shutdown_metric/1.5", "text/plain", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+
+	if _, statErr := os.Stat(cfg.FileStoragePath); statErr == nil {
+		t.Fatal("file must not exist before the final save")
+	}
+
+	cancel()
+	waitRun(t, done)
+
+	data, err := os.ReadFile(cfg.FileStoragePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "shutdown_metric") {
+		t.Fatalf("metric is missing from %s", data)
+	}
+}
+
+func TestRunFinishesInFlightRequest(t *testing.T) {
+	cfg := config.ServerConfig{Address: freeAddr(t)}
+	cancel, done := startServer(t, cfg)
+
+	// With Expect: 100-continue the server answers 100 only when the handler starts reading the body,
+	// so Got100Continue tells the test that the request is in flight on the server.
+	inFlight := make(chan struct{})
+	trace := &httptrace.ClientTrace{Got100Continue: func() { close(inFlight) }}
+	pr, pw := io.Pipe()
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(context.Background(), trace),
+		http.MethodPost, "http://"+cfg.Address+"/update", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Expect", "100-continue")
+	client := &http.Client{Transport: &http.Transport{ExpectContinueTimeout: 5 * time.Second}}
+
+	type result struct {
+		status int
+		err    error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		resp, err := client.Do(req)
+		if err != nil {
+			resCh <- result{err: err}
+			return
+		}
+		resp.Body.Close()
+		resCh <- result{status: resp.StatusCode}
+	}()
+
+	select {
+	case <-inFlight:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request did not reach the handler")
+	}
+	cancel()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		conn, err := net.Dial("tcp", cfg.Address)
+		if err != nil {
+			break
+		}
+		conn.Close()
+		if time.Now().After(deadline) {
+			t.Fatal("server kept accepting connections after cancel")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := pw.Write([]byte(`{"id":"slow","type":"gauge","value":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	pw.Close()
+
+	res := <-resCh
+	if res.err != nil || res.status != http.StatusOK {
+		t.Fatalf("got status %d, err %v", res.status, res.err)
+	}
+	waitRun(t, done)
+}
+
+func TestRunKeepsFileWhenServerFailsToStart(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+
+	path := filepath.Join(t.TempDir(), "metrics.json")
+	const old = `[{"id":"old","type":"gauge","value":1}]`
+	if err = os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.ServerConfig{Address: busy.Addr().String(), StoreInterval: time.Hour, FileStoragePath: path}
+	if err = run(context.Background(), cfg); err == nil {
+		t.Fatal("expected a listen error")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != old {
+		t.Fatalf("file changed: %q, %v", data, err)
+	}
+}
+
+func TestRunStopsWhenPeriodicSaveFails(t *testing.T) {
+	// A regular file in place of the parent directory makes every save fail.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.ServerConfig{
+		Address:         freeAddr(t),
+		FileStoragePath: filepath.Join(blocker, "metrics.json"),
+		StoreInterval:   10 * time.Millisecond,
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(context.Background(), cfg) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "periodic save") {
+			t.Fatalf("got %v, want periodic save error", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not stop after a failed periodic save")
 	}
 }

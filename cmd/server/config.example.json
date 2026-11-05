@@ -1,0 +1,12 @@
+{
+    "address": "localhost:8080",
+    "restore": true,
+    "store_interval": "300s",
+    "store_file": "metrics-db.json",
+    "database_dsn": "",
+    "key": "",
+    "crypto_key": "",
+    "audit_file": "",
+    "audit_url": "",
+    "pprof_address": ""
+}
