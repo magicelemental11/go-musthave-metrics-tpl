@@ -290,3 +290,94 @@ func TestCryptoKey(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadServerTrustedSubnet(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     string
+		args    []string
+		file    string
+		want    string
+		wantErr bool
+	}{
+		{name: "default is empty", want: ""},
+		{name: "flag", args: []string{"-t", "192.168.1.0/24"}, want: "192.168.1.0/24"},
+		{name: "env", env: "10.0.0.0/8", want: "10.0.0.0/8"},
+		{name: "env over flag", env: "10.0.0.0/8", args: []string{"-t", "192.168.1.0/24"}, want: "10.0.0.0/8"},
+		{name: "file", file: `{"trusted_subnet": "172.16.0.0/12"}`, want: "172.16.0.0/12"},
+		{name: "flag over file", file: `{"trusted_subnet": "172.16.0.0/12"}`, args: []string{"-t", "192.168.1.0/24"}, want: "192.168.1.0/24"},
+		{name: "invalid flag", args: []string{"-t", "10.0.0.1"}, wantErr: true},
+		{name: "invalid env", env: "garbage", wantErr: true},
+		{name: "invalid file", file: `{"trusted_subnet": "10.0.0.0/33"}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearEnv(t, serverEnv...)
+			if tt.env != "" {
+				t.Setenv("TRUSTED_SUBNET", tt.env)
+			}
+			args := tt.args
+			if tt.file != "" {
+				args = append([]string{"-c", writeConfig(t, tt.file)}, args...)
+			}
+			cfg, err := LoadServer(args)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("want error, got %+v", cfg)
+				}
+				return
+			}
+			if err != nil || cfg.TrustedSubnet != tt.want {
+				t.Fatalf("got %q, %v; want %q", cfg.TrustedSubnet, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestGRPCAddress(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		args []string
+		file string
+		want string
+	}{
+		{name: "default is empty", want: ""},
+		{name: "flag", args: []string{"-grpc-address", "localhost:3200"}, want: "localhost:3200"},
+		{name: "env", env: "env:3200", want: "env:3200"},
+		{name: "env over flag", env: "env:3200", args: []string{"-grpc-address", "flag:3200"}, want: "env:3200"},
+		{name: "file", file: `{"grpc_address": "file:3200"}`, want: "file:3200"},
+		{name: "flag over file", file: `{"grpc_address": "file:3200"}`, args: []string{"-grpc-address", "flag:3200"}, want: "flag:3200"},
+	}
+	loaders := map[string]struct {
+		env  []string
+		load func(args []string) (string, error)
+	}{
+		"server": {serverEnv, func(args []string) (string, error) {
+			cfg, err := LoadServer(args)
+			return cfg.GRPCAddress, err
+		}},
+		"agent": {agentEnv, func(args []string) (string, error) {
+			cfg, err := LoadAgent(args)
+			return cfg.GRPCAddress, err
+		}},
+	}
+	for name, l := range loaders {
+		for _, tt := range tests {
+			t.Run(name+"/"+tt.name, func(t *testing.T) {
+				clearEnv(t, l.env...)
+				if tt.env != "" {
+					t.Setenv("GRPC_ADDRESS", tt.env)
+				}
+				args := tt.args
+				if tt.file != "" {
+					args = append([]string{"-c", writeConfig(t, tt.file)}, args...)
+				}
+				got, err := l.load(args)
+				if err != nil || got != tt.want {
+					t.Fatalf("got %q, %v; want %q", got, err, tt.want)
+				}
+			})
+		}
+	}
+}

@@ -26,6 +26,7 @@ import (
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/retry"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/rsacrypt"
 	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/sign"
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/subnet"
 )
 
 const requestTimeout = 10 * time.Second
@@ -44,7 +45,14 @@ type Agent struct {
 	delays    []time.Duration
 	key       string
 	pubKey    *rsa.PublicKey
+	realIP    string
 	rateLimit int
+	sender    sender // nil sends over HTTP to the address given to ReportMetrics
+}
+
+// sender delivers one batch to the server. ReportMetrics does not know the transport behind it.
+type sender interface {
+	Send(ctx context.Context, batch []model.Metrics) error
 }
 
 // NewAgent creates an Agent. key signs requests (empty disables signing);
@@ -62,6 +70,27 @@ func NewAgent(key string, rateLimit int) *Agent {
 func (a *Agent) WithPublicKey(pub *rsa.PublicKey) *Agent {
 	a.pubKey = pub
 	return a
+}
+
+// WithRealIP sets the IP sent in the X-Real-IP header; empty omits the header. It returns a.
+func (a *Agent) WithRealIP(ip string) *Agent {
+	a.realIP = ip
+	return a
+}
+
+// HostIP returns the local IP address the host uses to reach serverAddr (host:port).
+// Dialing UDP sends no packets: it only picks the route and the source address.
+// IPv4 is tried first, so "localhost" gives 127.0.0.1 rather than ::1.
+func HostIP(serverAddr string) (string, error) {
+	conn, err := net.Dial("udp4", serverAddr)
+	if err != nil {
+		conn, err = net.Dial("udp", serverAddr)
+	}
+	if err != nil {
+		return "", fmt.Errorf("host ip: %w", err)
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String(), nil
 }
 
 // CollectMetrics reads runtime.MemStats and increments PollCount.
@@ -131,7 +160,8 @@ func (a *Agent) CollectSystemMetrics() error {
 	return nil
 }
 
-// ReportMetrics sends the collected metrics to serverAddr in batches through a bounded worker pool.
+// ReportMetrics sends the collected metrics in batches through a bounded worker pool: over gRPC after
+// DialGRPC, otherwise over HTTP to serverAddr, a base URL such as "http://localhost:8080".
 // The mutex is not held while sending, so collection is not blocked by a slow server.
 func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 	gauges, pollCount := a.snapshot()
@@ -147,19 +177,21 @@ func (a *Agent) ReportMetrics(ctx context.Context, serverAddr string) {
 		return
 	}
 
+	s := a.sender
+	if s == nil {
+		s = httpSender{a: a, url: serverAddr + "/updates/"}
+	}
 	chunks := splitBatch(batch, a.rateLimit)
 	runPool(ctx, a.rateLimit, len(chunks), func(i int) {
-		var status int
-		err := retry.Do(ctx, a.delays, func() (err error) {
-			status, err = sendBatch(ctx, serverAddr+"/updates/", a.key, a.pubKey, chunks[i])
-			return err
-		}, isTransientNetErr)
+		err := retry.Do(ctx, a.delays, func() error {
+			return s.Send(ctx, chunks[i])
+		}, isTransient)
 		if err != nil {
 			log.Printf("error sending batch of %d metrics: %v", len(chunks[i]), err)
 			return
 		}
-		log.Printf("sent batch of %d metrics → %d", len(chunks[i]), status)
-		if status == http.StatusOK && hasPollCount(chunks[i]) {
+		log.Printf("sent batch of %d metrics", len(chunks[i]))
+		if hasPollCount(chunks[i]) {
 			// Subtract only what was sent: polls made during sending are not lost.
 			a.mu.Lock()
 			a.pollCount -= pollCount
@@ -210,6 +242,10 @@ dispatch:
 	wg.Wait()
 }
 
+func isTransient(err error) bool {
+	return isTransientNetErr(err) || isTransientGRPCErr(err)
+}
+
 func isTransientNetErr(err error) bool {
 	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -219,7 +255,25 @@ func isTransientNetErr(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-func sendBatch(ctx context.Context, url, key string, pub *rsa.PublicKey, batch []model.Metrics) (int, error) {
+// httpSender posts a batch as gzipped JSON, signed and encrypted when the agent has the keys.
+type httpSender struct {
+	a   *Agent
+	url string
+}
+
+// Send fails on any status but 200. Such an error is not transient, so it is not retried.
+func (s httpSender) Send(ctx context.Context, batch []model.Metrics) error {
+	status, err := s.a.sendBatch(ctx, s.url, batch)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("server responded %d", status)
+	}
+	return nil
+}
+
+func (a *Agent) sendBatch(ctx context.Context, url string, batch []model.Metrics) (int, error) {
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return 0, fmt.Errorf("marshal: %w", err)
@@ -238,8 +292,8 @@ func sendBatch(ctx context.Context, url, key string, pub *rsa.PublicKey, batch [
 	// The body is gzipped and then encrypted; the signature covers the uncompressed JSON,
 	// because the server decrypts, then decompresses, then verifies.
 	payload := buf.Bytes()
-	if pub != nil {
-		if payload, err = rsacrypt.Encrypt(pub, payload); err != nil {
+	if a.pubKey != nil {
+		if payload, err = rsacrypt.Encrypt(a.pubKey, payload); err != nil {
 			return 0, fmt.Errorf("encrypt: %w", err)
 		}
 	}
@@ -250,11 +304,14 @@ func sendBatch(ctx context.Context, url, key string, pub *rsa.PublicKey, batch [
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
-	if key != "" {
-		req.Header.Set(sign.Header, sign.Sign(key, body))
+	if a.key != "" {
+		req.Header.Set(sign.Header, sign.Sign(a.key, body))
 	}
-	if pub != nil {
+	if a.pubKey != nil {
 		req.Header.Set(rsacrypt.Header, rsacrypt.HeaderValue)
+	}
+	if a.realIP != "" {
+		req.Header.Set(subnet.Header, a.realIP)
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {

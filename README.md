@@ -73,6 +73,46 @@ go test -v ./...
 - Доставка синхронная: события уходят получателям по очереди внутри обработчика запроса. Таймаут HTTP-получателя 2 секунды, поэтому недоступный `AUDIT_URL` замедляет каждое успешное обновление до этого времени. Ошибки получателей пишутся в лог и не влияют на ответ клиенту.
 - Адрес клиента берётся из заголовка `X-Real-IP`, а если его нет, то из `RemoteAddr`. Заголовок не аутентифицирован: его должен выставлять обратный прокси, иначе клиент может подставить любой адрес. `X-Forwarded-For` не используется.
 
+## Доверенная подсеть
+
+Флаг `-t` / `TRUSTED_SUBNET` / `trusted_subnet` задаёт подсеть в формате CIDR (например, `192.168.1.0/24`). Сервер принимает запросы на запись метрик (`/update…`, `/updates/`) только с заголовком `X-Real-IP`, адрес в котором входит в эту подсеть. Иначе отвечает `403 Forbidden`. Чтение (`/`, `/value…`, `/ping`) не ограничено. Пустое значение отключает проверку.
+
+- Сервер смотрит только на `X-Real-IP`, без `RemoteAddr`.
+- Агент при старте определяет IP, с которого ходит к серверу, и отправляет его в `X-Real-IP` с каждым запросом. Сначала пробуется IPv4, поэтому для `-a localhost:8080` это `127.0.0.1`.
+- Заголовок выставляет сам клиент, так что это защита для работы за обратным прокси, а не от подделки адреса.
+
+```bash
+go run cmd/server/main.go -t 127.0.0.0/8
+```
+
+## gRPC
+
+Агент может отправлять батчи метрик по gRPC (`Metrics.UpdateMetrics`, контракт — [api/proto/metrics.proto](api/proto/metrics.proto)). HTTP при этом продолжает работать как раньше.
+
+- Сервер с `-grpc-address` / `GRPC_ADDRESS` / `grpc_address` слушает gRPC на этом адресе параллельно с HTTP. Пусто — gRPC-сервер не запускается.
+- Агент с тем же параметром шлёт батчи по gRPC, без него — по HTTP. Отдельного переключателя нет: транспорт выбирается по наличию адреса.
+- IP агента уходит в metadata `x-real-ip`, сервер проверяет его по `trusted_subnet` в интерсепторе. Нет IP или адрес вне подсети — `PermissionDenied`, метрики не сохраняются.
+- Невалидный батч — `InvalidArgument`, ошибка хранилища — `Internal`. Агент повторяет вызов только при `Unavailable` и `DeadlineExceeded`.
+- Подпись (`-k`) и шифрование (`-crypto-key`) относятся только к HTTP, по gRPC не применяются. Соединение без TLS.
+
+```bash
+go run ./cmd/server -grpc-address localhost:3200
+go run ./cmd/agent -grpc-address localhost:3200
+
+# Вызов вручную (grpcurl читает контракт из .proto, reflection на сервере не включён)
+grpcurl -plaintext -import-path api/proto -proto metrics.proto \
+  -d '{"metrics":[{"id":"Alloc","type":"GAUGE","value":1.5}]}' \
+  localhost:3200 metrics.Metrics/UpdateMetrics
+```
+
+Сгенерированный код лежит в `internal/proto` и коммитится. Перегенерация после правки `.proto` (нужен `protoc`):
+
+```bash
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+go generate ./internal/proto
+```
+
 ## Профилирование
 
 ### Бенчмарки

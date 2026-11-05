@@ -18,6 +18,8 @@
 | Файл аудита | `-audit-file` | `AUDIT_FILE` | `audit_file` | пусто |
 | URL аудита | `-audit-url` | `AUDIT_URL` | `audit_url` | пусто |
 | Адрес pprof | `-pprof-address` | `PPROF_ADDRESS` | `pprof_address` | пусто |
+| Доверенная подсеть агентов (CIDR) | `-t` | `TRUSTED_SUBNET` | `trusted_subnet` | пусто (проверки нет) |
+| Адрес gRPC-сервера | `-grpc-address` | `GRPC_ADDRESS` | `grpc_address` | пусто (gRPC выключен) |
 
 ```json
 {
@@ -26,7 +28,8 @@
     "store_interval": "1s",
     "store_file": "/path/to/file.db",
     "database_dsn": "",
-    "crypto_key": "/path/to/private.pem"
+    "crypto_key": "/path/to/private.pem",
+    "trusted_subnet": "192.168.1.0/24"
 }
 ```
 
@@ -40,6 +43,7 @@
 | Ключ подписи | `-k` | `KEY` | `key` | пусто |
 | Публичный ключ RSA | `-crypto-key` | `CRYPTO_KEY` | `crypto_key` | пусто |
 | Лимит запросов | `-l` | `RATE_LIMIT` | `rate_limit` | `1` |
+| Адрес gRPC-сервера | `-grpc-address` | `GRPC_ADDRESS` | `grpc_address` | пусто (отправка по HTTP) |
 
 ```json
 {

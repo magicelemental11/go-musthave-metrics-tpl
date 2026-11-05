@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/magicelemental11/go-musthave-metrics-tpl/internal/subnet"
 )
 
 const (
@@ -27,6 +29,8 @@ type ServerConfig struct {
 	AuditFile       string
 	AuditURL        string
 	PprofAddress    string
+	TrustedSubnet   string // CIDR of agents allowed to send metrics, empty allows everyone
+	GRPCAddress     string // gRPC listen address, empty disables the gRPC server
 }
 
 // AgentConfig holds the agent settings.
@@ -37,6 +41,7 @@ type AgentConfig struct {
 	Key            string
 	CryptoKey      string // path to the RSA public key, empty disables encryption
 	RateLimit      int
+	GRPCAddress    string // gRPC server address; when set, metrics go over gRPC instead of HTTP
 }
 
 // LoadServer parses args into a ServerConfig. Precedence: environment variable, flag, config file, default.
@@ -52,6 +57,8 @@ func LoadServer(args []string) (ServerConfig, error) {
 	auditFile := fs.String("audit-file", "", "audit log file path (empty - disabled)")
 	auditURL := fs.String("audit-url", "", "audit receiver URL (empty - disabled)")
 	pprofAddress := fs.String("pprof-address", "", "pprof listen address (empty - disabled)")
+	trustedSubnet := fs.String("t", "", "trusted agent subnet in CIDR notation (empty - no check)")
+	grpcAddress := fs.String("grpc-address", "", "gRPC listen address (empty - disabled)")
 	configPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
@@ -71,6 +78,8 @@ func LoadServer(args []string) (ServerConfig, error) {
 	fromFile(set, "audit-file", auditFile, file.AuditFile)
 	fromFile(set, "audit-url", auditURL, file.AuditURL)
 	fromFile(set, "pprof-address", pprofAddress, file.PprofAddress)
+	fromFile(set, "t", trustedSubnet, file.TrustedSubnet)
+	fromFile(set, "grpc-address", grpcAddress, file.GRPCAddress)
 
 	storeEvery, err := interval("STORE_INTERVAL", *storeInterval, set["i"], file.StoreInterval, 0)
 	if err != nil {
@@ -82,6 +91,10 @@ func LoadServer(args []string) (ServerConfig, error) {
 		if err != nil {
 			return ServerConfig{}, fmt.Errorf("RESTORE must be true or false, got %q", v)
 		}
+	}
+	trustedSubnetValue := envString("TRUSTED_SUBNET", *trustedSubnet)
+	if _, err = subnet.New(trustedSubnetValue); err != nil {
+		return ServerConfig{}, err
 	}
 	filePathValue := *filePath
 	if v, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
@@ -99,6 +112,8 @@ func LoadServer(args []string) (ServerConfig, error) {
 		AuditFile:       envString("AUDIT_FILE", *auditFile),
 		AuditURL:        envString("AUDIT_URL", *auditURL),
 		PprofAddress:    envString("PPROF_ADDRESS", *pprofAddress),
+		TrustedSubnet:   trustedSubnetValue,
+		GRPCAddress:     envString("GRPC_ADDRESS", *grpcAddress),
 	}, nil
 }
 
@@ -111,6 +126,7 @@ func LoadAgent(args []string) (AgentConfig, error) {
 	key := fs.String("k", "", "signing key (empty - disabled)")
 	cryptoKey := fs.String("crypto-key", "", "path to the RSA public key (empty - disabled)")
 	limit := fs.Int("l", 1, "max concurrent requests to the server")
+	grpcAddress := fs.String("grpc-address", "", "gRPC server address (empty - send over HTTP)")
 	configPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return AgentConfig{}, err
@@ -125,6 +141,7 @@ func LoadAgent(args []string) (AgentConfig, error) {
 	fromFile(set, "k", key, file.Key)
 	fromFile(set, "crypto-key", cryptoKey, file.CryptoKey)
 	fromFile(set, "l", limit, file.RateLimit)
+	fromFile(set, "grpc-address", grpcAddress, file.GRPCAddress)
 
 	pollInterval, err := interval("POLL_INTERVAL", *poll, set["p"], file.PollInterval, 1)
 	if err != nil {
@@ -153,6 +170,7 @@ func LoadAgent(args []string) (AgentConfig, error) {
 		Key:            envString("KEY", *key),
 		CryptoKey:      envString("CRYPTO_KEY", *cryptoKey),
 		RateLimit:      rateLimit,
+		GRPCAddress:    envString("GRPC_ADDRESS", *grpcAddress),
 	}, nil
 }
 
